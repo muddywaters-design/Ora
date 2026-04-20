@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StockOracle Pro</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#060a0f; --s1:#0a1018; --s2:#0f1a27; --s3:#162030;
+  --b1:#172030; --b2:#1e2e45;
+  --green:#00e5a0; --green2:#00b87a;
+  --red:#ff4466; --yellow:#ffd060; --blue:#4da8ff; --orange:#ff9f43;
+  --t1:#e0eaff; --t2:#7a9bbf; --t3:#3d5c78;
+  --mono:'Space Mono',monospace; --sans:'Inter',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{background:var(--bg);color:var(--t1);font-family:var(--sans);font-size:14px;}
+
+/* ── TOPBAR ── */
+.topbar{display:flex;align-items:center;gap:12px;padding:0 16px;height:52px;background:var(--s1);border-bottom:1px solid var(--b1);position:sticky;top:0;z-index:200;}
+.hamburger{background:none;border:none;cursor:pointer;display:flex;flex-direction:column;gap:5px;padding:6px;flex-shrink:0;}
+.hamburger span{display:block;width:22px;height:2px;background:var(--t2);border-radius:2px;transition:all .25s;}
+.hamburger.open span:nth-child(1){transform:translateY(7px) rotate(45deg);}
+.hamburger.open span:nth-child(2){opacity:0;}
+.hamburger.open span:nth-child(3){transform:translateY(-7px) rotate(-45deg);}
+.logo{display:flex;align-items:center;gap:8px;flex:1;}
+.logo-box{width:28px;height:28px;background:var(--green);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;font-weight:700;color:var(--bg);}
+.logo-name{font-family:var(--mono);font-size:13px;font-weight:700;}
+.logo-name span{color:var(--green);}
+.live-pill{display:flex;align-items:center;gap:5px;padding:4px 10px;background:rgba(0,229,160,.08);border:1px solid rgba(0,229,160,.15);border-radius:20px;}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 2s infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.live-label{font-family:var(--mono);font-size:9px;color:var(--green);letter-spacing:.08em;}
+
+/* ── DRAWER ── */
+.drawer-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:150;}
+.drawer-overlay.open{display:block;}
+.drawer{position:fixed;top:0;left:-280px;width:280px;height:100%;background:var(--s1);border-right:1px solid var(--b1);z-index:160;transition:left .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;}
+.drawer.open{left:0;}
+.drawer-header{padding:16px;border-bottom:1px solid var(--b1);font-family:var(--mono);font-size:10px;letter-spacing:.15em;color:var(--t3);text-transform:uppercase;}
+.drawer-nav{padding:8px;}
+.nav-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;cursor:pointer;transition:background .15s;color:var(--t2);font-size:13px;font-weight:500;}
+.nav-item:hover{background:var(--s2);}
+.nav-item.active{background:var(--s2);color:var(--t1);}
+.nav-item .nav-icon{font-size:16px;width:22px;text-align:center;}
+.nav-item .nav-badge{margin-left:auto;background:var(--green);color:var(--bg);border-radius:20px;padding:1px 7px;font-family:var(--mono);font-size:9px;font-weight:700;}
+
+/* ── PAGES ── */
+.page{display:none;flex-direction:column;height:calc(100vh - 52px);overflow-y:auto;}
+.page.active{display:flex;}
+.page::-webkit-scrollbar{width:4px;}
+.page::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
+
+/* ── ANALYZE PAGE ── */
+.analyze-top{padding:14px 16px;border-bottom:1px solid var(--b1);background:var(--s1);flex-shrink:0;display:flex;flex-direction:column;gap:10px;}
+.input-row{display:flex;gap:8px;}
+input.ti{flex:1;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:10px 14px;border-radius:8px;font-family:var(--mono);font-size:13px;text-transform:uppercase;outline:none;transition:border-color .2s;}
+input.ti:focus{border-color:var(--green);}
+input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
+.btn{border:none;cursor:pointer;border-radius:8px;font-family:var(--mono);font-weight:700;transition:all .15s;}
+.btn-g{background:var(--green);color:var(--bg);padding:10px 18px;font-size:12px;}
+.btn-g:hover{background:var(--green2);}
+.btn-g:disabled{background:var(--b2);color:var(--t3);cursor:not-allowed;}
+.btn-wsb{background:var(--orange);color:var(--bg);padding:12px 14px;font-size:11px;width:100%;letter-spacing:.03em;}
+.btn-wsb:hover{background:#e8913c;}
+.btn-wsb:disabled{background:var(--b2);color:var(--t3);cursor:not-allowed;}
+
+/* ── CONTENT AREA ── */
+.content{flex:1;overflow-y:auto;}
+.content::-webkit-scrollbar{width:4px;}
+.content::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
+.panel{padding:18px;display:flex;flex-direction:column;gap:14px;max-width:960px;margin:0 auto;}
+
+/* States */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:12px;color:var(--t3);text-align:center;padding:32px;}
+.empty-icon{font-size:44px;opacity:.2;}
+.empty-title{font-family:var(--mono);font-size:15px;color:var(--t2);letter-spacing:.05em;}
+.empty-desc{font-size:12px;line-height:2;color:var(--t3);}
+.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;gap:18px;}
+.loading-sym{font-family:var(--mono);font-size:30px;font-weight:700;color:var(--green);letter-spacing:.08em;}
+.lbar{width:220px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;}
+.lfill{height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:1px;animation:la 2s ease-in-out infinite;}
+@keyframes la{0%{width:0;margin-left:0}50%{width:60%;margin-left:20%}100%{width:0;margin-left:100%}}
+.lsteps{font-family:var(--mono);font-size:10px;color:var(--t3);text-align:center;line-height:2.2;letter-spacing:.03em;}
+.lstep-done{color:var(--green);}
+.lstep-act{color:var(--t1);}
+.err-box{margin:16px;background:rgba(255,68,102,.08);border:1px solid rgba(255,68,102,.25);border-radius:10px;padding:14px;color:var(--red);font-size:13px;}
+
+/* Cards */
+.card{background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;}
+.ch{padding:10px 16px;border-bottom:1px solid var(--b1);font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--t3);text-transform:uppercase;display:flex;align-items:center;gap:8px;}
+.ch::before{content:'';width:3px;height:12px;background:var(--accent,var(--green));border-radius:2px;}
+.cb{padding:14px;}
+
+/* Stock header */
+.sh{background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:18px;}
+.sh-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:10px;}
+.sh-sym{font-family:var(--mono);font-size:26px;font-weight:700;letter-spacing:.05em;}
+.sh-co{font-size:12px;color:var(--t2);margin-top:3px;}
+.sh-btns{display:flex;gap:6px;flex-shrink:0;}
+.bsm{background:transparent;border:1px solid var(--b2);color:var(--t2);padding:7px 11px;border-radius:7px;font-family:var(--mono);font-size:10px;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.bsm:hover{border-color:var(--t2);color:var(--t1);}
+.btrack{background:var(--green);color:var(--bg);border-color:var(--green);font-weight:700;}
+.btrack:hover{background:var(--green2);border-color:var(--green2);color:var(--bg);}
+.btrack.tracked{background:transparent;border-color:var(--b2);color:var(--t3);cursor:default;}
+.btrack.tracked:hover{background:transparent;border-color:var(--b2);color:var(--t3);}
+.sh-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.badge{padding:4px 11px;border-radius:20px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.06em;}
+.bg{background:rgba(0,229,160,.1);color:var(--green);border:1px solid rgba(0,229,160,.25);}
+.br{background:rgba(255,68,102,.1);color:var(--red);border:1px solid rgba(255,68,102,.25);}
+.by{background:rgba(255,208,96,.1);color:var(--yellow);border:1px solid rgba(255,208,96,.25);}
+.bb{background:rgba(77,168,255,.1);color:var(--blue);border:1px solid rgba(77,168,255,.25);}
+.sh-date{font-family:var(--mono);font-size:10px;color:var(--t3);margin-left:auto;}
+
+/* Sources */
+.src-bar{background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;}
+.src-lbl{font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-right:4px;}
+.src-tag{padding:2px 8px;background:var(--s2);border:1px solid var(--b2);border-radius:20px;font-size:10px;color:var(--t2);}
+.src-tag.on{border-color:rgba(77,168,255,.4);color:var(--blue);}
+.src-cnt{font-family:var(--mono);font-size:10px;color:var(--green);margin-left:auto;}
+
+/* Forecast */
+.fc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.fc-cell{background:var(--s2);border:1px solid var(--b1);border-radius:10px;padding:13px;position:relative;overflow:hidden;}
+.fc-cell::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--acc,var(--green));}
+.fc-tf{font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;}
+.fc-dir{font-family:var(--mono);font-size:20px;font-weight:700;margin-bottom:2px;}
+.fc-rng{font-family:var(--mono);font-size:10px;color:var(--t2);margin-bottom:8px;}
+.cbar{height:3px;background:var(--b2);border-radius:2px;margin-bottom:4px;overflow:hidden;}
+.cfill{height:100%;border-radius:2px;background:var(--acc,var(--green));transition:width 1.2s ease;}
+.fc-cf{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;}
+.fc-rs{font-size:10px;color:var(--t3);margin-top:7px;line-height:1.4;}
+
+/* Signals */
+.sg-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.sg-cell{background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:11px;}
+.sg-n{font-size:10px;color:var(--t3);margin-bottom:4px;text-transform:capitalize;}
+.sg-v{font-family:var(--mono);font-size:13px;font-weight:700;}
+.sg-s{font-size:9px;color:var(--t3);margin-top:3px;}
+
+/* Colors */
+.bull{color:var(--green);} .bear{color:var(--red);} .neut{color:var(--yellow);}
+
+
+
+/* ── WATCHLIST PAGE ── */
+.wl-page{padding:18px;max-width:800px;margin:0 auto;}
+.wl-ph{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.wl-ph h2{font-family:var(--mono);font-size:14px;font-weight:700;letter-spacing:.05em;}
+.wl-ph span{font-family:var(--mono);font-size:10px;color:var(--t3);}
+.wl-table{background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;}
+.wl-row{display:grid;grid-template-columns:80px 1fr 90px 90px 90px 80px 110px 40px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--b1);gap:8px;}
+.wl-row:last-child{border-bottom:none;}
+.wl-thead{background:var(--s2);font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--t3);text-transform:uppercase;}
+.wl-tick{font-family:var(--mono);font-size:13px;font-weight:700;cursor:pointer;color:var(--blue);}
+.wl-tick:hover{color:var(--t1);}
+.wl-co{font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wl-rm{background:none;border:none;color:var(--t3);cursor:pointer;font-size:14px;padding:4px;transition:color .15s;}
+.wl-rm:hover{color:var(--red);}
+.wl-empty-msg{padding:48px;text-align:center;color:var(--t3);font-size:12px;line-height:1.9;}
+.btn-acc{background:transparent;border:1px solid var(--b2);color:var(--t2);padding:5px 9px;border-radius:6px;font-family:var(--mono);font-size:9px;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.btn-acc:hover{border-color:var(--blue);color:var(--blue);}
+.btn-acc:disabled{opacity:.4;cursor:not-allowed;}
+.acc-result{margin-top:10px;padding:10px 14px;background:var(--s2);border:1px solid var(--b1);border-radius:10px;font-size:12px;line-height:1.8;}
+.acc-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid var(--b1);}
+.acc-row:last-child{border-bottom:none;}
+.acc-tf{font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;flex-shrink:0;}
+.acc-forecast{font-family:var(--mono);font-size:10px;color:var(--t2);}
+.acc-actual{font-family:var(--mono);font-size:10px;font-weight:700;}
+.acc-verdict{font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;flex-shrink:0;}
+.acc-hit{background:rgba(0,229,160,.12);color:var(--green);border:1px solid rgba(0,229,160,.25);}
+.acc-miss{background:rgba(255,68,102,.1);color:var(--red);border:1px solid rgba(255,68,102,.25);}
+.acc-close{background:rgba(255,208,96,.1);color:var(--yellow);border:1px solid rgba(255,208,96,.25);}
+.acc-pending{background:rgba(61,92,120,.15);color:var(--t3);border:1px solid var(--b2);}
+.acc-score{text-align:center;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--t2);}
+
+/* API Key bar */
+.apikey-bar{background:var(--s1);border-bottom:1px solid var(--b1);padding:10px 16px;display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.apikey-bar.saved{border-bottom-color:rgba(0,229,160,.2);background:rgba(0,229,160,.03);}
+.apikey-label{font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;flex-shrink:0;}
+.apikey-input{flex:1;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:7px 12px;border-radius:7px;font-family:var(--mono);font-size:11px;outline:none;transition:border-color .2s;letter-spacing:.04em;}
+.apikey-input:focus{border-color:var(--green);}
+.apikey-input::placeholder{color:var(--t3);letter-spacing:0;}
+.apikey-save{background:var(--green);color:var(--bg);border:none;padding:7px 13px;border-radius:7px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s;}
+.apikey-save:hover{background:var(--green2);}
+.apikey-clear{background:transparent;border:1px solid var(--b2);color:var(--t3);padding:7px 11px;border-radius:7px;font-family:var(--mono);font-size:10px;cursor:pointer;transition:all .15s;}
+.apikey-clear:hover{border-color:var(--red);color:var(--red);}
+.apikey-status{font-family:var(--mono);font-size:9px;white-space:nowrap;flex-shrink:0;}
+
+/* Responsive */
+@media(max-width:800px){
+  .fc-grid{grid-template-columns:1fr 1fr;}
+  .wsb-grid{grid-template-columns:1fr 1fr;}
+  .wsb-cell{border-right:none;border-bottom:1px solid var(--b1);}
+  .wl-row{grid-template-columns:70px 1fr 90px 50px;}
+  .wl-col-wk,.wl-col-mo,.wl-col-yr{display:none;}
+}
+@media(max-width:560px){
+  .sg-grid{grid-template-columns:1fr 1fr;}
+  .fc-grid{grid-template-columns:1fr 1fr;}
+}
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <button class="hamburger" id="hambBtn" onclick="toggleDrawer()">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="logo">
+    <div class="logo-box">SO</div>
+    <div class="logo-name">Stock<span>Oracle</span> Pro</div>
+  </div>
+  <div class="live-pill">
+    <div class="live-dot"></div>
+    <span class="live-label" id="liveLabel">LIVE</span>
+  </div>
+</div>
+
+<!-- DRAWER OVERLAY -->
+<div class="drawer-overlay" id="drawerOverlay" onclick="toggleDrawer()"></div>
+
+<!-- DRAWER -->
+<div class="drawer" id="drawer">
+  <div class="drawer-header">Navigation</div>
+  <div class="drawer-nav">
+    <div class="nav-item active" id="nav-analyze" onclick="goTo('analyze')">
+      <span class="nav-icon">📡</span>
+      <span>Analyze</span>
+    </div>
+    <div class="nav-item" id="nav-watchlist" onclick="goTo('watchlist')">
+      <span class="nav-icon">📋</span>
+      <span>Watchlist</span>
+      <span class="nav-badge" id="wlBadge">0</span>
+    </div>
+  </div>
+</div>
+
+<!-- API KEY BAR -->
+<div class="apikey-bar" id="apikeyBar">
+  <span class="apikey-label">API Key</span>
+  <input class="apikey-input" id="apikeyInput" type="password" placeholder="sk-ant-api03-…  (saved locally in your browser)" maxlength="120">
+  <button class="apikey-save" onclick="saveApiKey()">Save</button>
+  <button class="apikey-clear" onclick="clearApiKey()" title="Clear saved key">✕</button>
+  <span class="apikey-status" id="apikeyStatus"></span>
+</div>
+
+<!-- PAGE: ANALYZE -->
+<div class="page active" id="page-analyze">
+  <div class="analyze-top">
+    <div class="input-row">
+      <input class="ti" id="tickerInput" placeholder="Enter ticker symbol: NVDA, AAPL…" maxlength="10">
+      <button class="btn btn-g" id="runBtn" onclick="runAnalysis()">RUN ▶</button>
+    </div>
+  </div>
+  <div class="content" id="analyzeContent">
+    <div class="empty">
+      <div class="empty-icon">📡</div>
+      <div class="empty-title">STOCKORACLE PRO</div>
+      <div class="empty-desc">
+        Enter a ticker and press RUN<br>
+        Real-time data from 12+ financial sources<br>
+        Weekly · Monthly · Yearly · 5-Year forecasts
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE: WATCHLIST -->
+<div class="page" id="page-watchlist">
+  <div class="content">
+    <div class="wl-page" id="wlPage">
+      <div class="wl-ph">
+        <h2>Watchlist</h2>
+        <span id="wlSubtitle">0 stocks tracked</span>
+      </div>
+      <div class="wl-table" id="wlTable">
+        <div class="wl-empty-msg">
+          No stocks tracked yet.<br>
+          Analyze a ticker and press <b style="color:var(--green)">+ Track</b> to add it here.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────
+let watchlist = JSON.parse(localStorage.getItem('so_wl2') || '[]');
+let currentTicker = '';
+let currentResult = null;
+
+document.getElementById('tickerInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') runAnalysis();
+  e.target.value = e.target.value.toUpperCase();
+});
+
+// ── API Key management ────────────────────────────────────────
+function loadApiKey() {
+  const key = localStorage.getItem('so_apikey') || '';
+  const input = document.getElementById('apikeyInput');
+  const bar = document.getElementById('apikeyBar');
+  const status = document.getElementById('apikeyStatus');
+  if (key) {
+    input.value = key;
+    bar.classList.add('saved');
+    status.textContent = '✓ Saved';
+    status.style.color = 'var(--green)';
+  } else {
+    bar.classList.remove('saved');
+    status.textContent = 'Not set';
+    status.style.color = 'var(--t3)';
+  }
+}
+
+function saveApiKey() {
+  const val = document.getElementById('apikeyInput').value.trim();
+  if (!val.startsWith('sk-ant-')) {
+    alert('Invalid key — Anthropic keys start with sk-ant-');
+    return;
+  }
+  localStorage.setItem('so_apikey', val);
+  loadApiKey();
+}
+
+function clearApiKey() {
+  localStorage.removeItem('so_apikey');
+  document.getElementById('apikeyInput').value = '';
+  loadApiKey();
+}
+
+function getApiKey() {
+  return localStorage.getItem('so_apikey') || '';
+}
+
+loadApiKey();
+renderWatchlist();
+
+// ── Navigation ─────────────────────────────────────────────────
+function toggleDrawer() {
+  document.getElementById('drawer').classList.toggle('open');
+  document.getElementById('drawerOverlay').classList.toggle('open');
+  document.getElementById('hambBtn').classList.toggle('open');
+}
+
+function goTo(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.getElementById('nav-' + page).classList.add('active');
+  toggleDrawer();
+}
+
+// ── API ────────────────────────────────────────────────────────
+async function apiCall(messages, useSearch, maxTokens) {
+  const key = getApiKey();
+  const headers = { 'Content-Type': 'application/json' };
+  if (key) {
+    headers['x-api-key'] = key;
+    headers['anthropic-version'] = '2023-06-01';
+    headers['anthropic-dangerous-direct-browser-access'] = 'true';
+  }
+
+  const body = {
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: maxTokens || 4000,
+    messages,
+  };
+  if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    throw new Error(e.error?.message || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+async function searchThenSummarize(prompt, maxTokens) {
+  // No web_search — single plain call to stay within token limits
+  return toJSON(prompt, maxTokens || 1500);
+}
+
+async function toJSON(prompt) {
+  const d = await apiCall([{ role: 'user', content: prompt }], false, 2000);
+  return d.content.filter(b => b.type === 'text').map(b => b.text).join('');
+}
+
+function extractJSON(raw) {
+  const text = raw.replace(/```(?:json)?/gi, '').trim();
+  let depth = 0, start = -1, end = -1;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '{') { if (!depth) start = i; depth++; }
+    else if (text[i] === '}') { if (!--depth) { end = i; break; } }
+  }
+  if (start < 0) throw new Error('No JSON in response');
+  return JSON.parse(text.slice(start, end + 1));
+}
+
+// ── Prompts ────────────────────────────────────────────────────
+function mkSinglePrompt(ticker, liveData) {
+  const d = new Date().toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'});
+  const live = liveData ? `
+LIVE MARKET DATA (use these exact numbers):
+- Current Price: $${liveData.price}
+- Change today: ${liveData.change} (${liveData.changePct}%)
+- 52-week High: $${liveData.high52}
+- 52-week Low: $${liveData.low52}
+- Market Cap: ${liveData.marketCap}
+- Volume: ${liveData.volume}
+- P/E Ratio: ${liveData.pe}
+- EPS: ${liveData.eps}
+` : '';
+  return `Today is ${d}. You are a stock analyst. Analyze ${ticker}.${live}
+Use the live price above as current_price. Add your knowledge for signals, forecasts, risks and catalysts.
+Output ONLY this JSON (no markdown, start with {, end with }):
+{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"$X","label":"X"},"pe_ratio":{"value":"${liveData?.pe||'X'}","label":"X"},"short_interest":{"value":"X%","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"X"},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
+}
+
+function mkResearchPrompt(ticker) { return mkSinglePrompt(ticker, null); }
+
+function mkJSONPrompt(ticker, research) {
+  return `Convert this ${ticker} research to JSON. Start with { end with }. No markdown, no extra text.
+
+${research.slice(0, 1500)}
+
+{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":68,"signal":"BULLISH","reasoning":"Short reason."},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"Short reason."},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"Short reason."},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"Short reason."}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
+}
+
+
+
+
+
+// ── Live price fetcher ────────────────────────────────────────
+// Tries Yahoo Finance directly (works from browser, not from Claude.ai)
+async function fetchLivePrice(ticker) {
+  const proxies = [
+    `https://corsproxy.io/?`,
+    `https://api.allorigins.win/raw?url=`,
+    `https://thingproxy.freeboard.io/fetch/`,
+  ];
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d&includePrePost=false`;
+
+  for (const proxy of proxies) {
+    try {
+      const r = await fetch(proxy + encodeURIComponent(yahooUrl), {
+        signal: AbortSignal.timeout(9000),
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+      if (!r.ok) continue;
+      const data = await r.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (!meta?.regularMarketPrice) continue;
+
+      const price = meta.regularMarketPrice;
+      const prev  = meta.chartPreviousClose || meta.regularMarketPreviousClose || price;
+      const change    = (price - prev).toFixed(2);
+      const changePct = (((price - prev) / prev) * 100).toFixed(2);
+
+      // Try fundamentals with same proxy
+      let pe='—', eps='—', targetPrice='—', numAnalysts='—';
+      try {
+        const url2 = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=financialData,defaultKeyStatistics`;
+        const r2 = await fetch(proxy + encodeURIComponent(url2), {signal: AbortSignal.timeout(7000)});
+        if (r2.ok) {
+          const d2 = await r2.json();
+          const res = d2?.quoteSummary?.result?.[0];
+          pe          = res?.defaultKeyStatistics?.trailingPE?.fmt || '—';
+          eps         = res?.defaultKeyStatistics?.trailingEps?.fmt || '—';
+          targetPrice = res?.financialData?.targetMeanPrice?.fmt || '—';
+          numAnalysts = res?.financialData?.numberOfAnalystOpinions?.raw || '—';
+        }
+      } catch(_) {}
+
+      return {
+        price: price.toFixed(2), change, changePct,
+        high52:    meta.fiftyTwoWeekHigh?.toFixed(2) || '—',
+        low52:     meta.fiftyTwoWeekLow?.toFixed(2)  || '—',
+        marketCap: meta.marketCap ? formatMarketCap(meta.marketCap) : '—',
+        volume:    meta.regularMarketVolume?.toLocaleString() || '—',
+        currency:  meta.currency || 'USD',
+        pe, eps, targetPrice, numAnalysts,
+        source: 'Yahoo Finance (live)',
+      };
+    } catch(e) { console.warn('Proxy failed:', proxy, e.message); }
+  }
+  return null; // all failed — Claude will use its own knowledge
+}
+
+function formatMarketCap(n) {
+  if (n >= 1e12) return (n/1e12).toFixed(2)+'T';
+  if (n >= 1e9)  return (n/1e9).toFixed(2)+'B';
+  if (n >= 1e6)  return (n/1e6).toFixed(2)+'M';
+  return n.toString();
+}
+async function fetchFundamentals() { return {}; }
+
+// ── Run Analysis ───────────────────────────────────────────────
+async function runAnalysis(sym) {
+  const t = (sym || document.getElementById('tickerInput').value).trim().toUpperCase();
+  if (!t) return;
+  currentTicker = t;
+  document.getElementById('tickerInput').value = t;
+
+  // Switch to analyze page
+  goPage('analyze');
+
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('liveLabel').textContent = 'FETCHING…';
+
+  const steps = ['Yahoo Finance & Reuters…','Bloomberg & CNBC…','MarketWatch & Seeking Alpha…','Benzinga & Finviz…','TradingView & Motley Fool…','Investing.com & The Street…','Building forecast model…'];
+  showAnalyzeLoading(t, steps);
+
+  let stepIdx = 0;
+  const iv = setInterval(() => {
+    stepIdx++;
+    const els = document.querySelectorAll('.lstep-item');
+    if (stepIdx < els.length) {
+      if (els[stepIdx - 1]) { els[stepIdx - 1].className = 'lstep-done'; els[stepIdx - 1].textContent = '✓ ' + steps[stepIdx - 1]; }
+      if (els[stepIdx]) { els[stepIdx].className = 'lstep-act'; }
+    }
+  }, 1600);
+
+  try {
+    // Fetch live market data first
+    let liveData = await fetchLivePrice(t);
+    if (!liveData) {
+      // Show warning in loading area
+      const warn = document.createElement('div');
+      warn.id = 'live-warn';
+      warn.style.cssText = 'background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.2);border-radius:8px;padding:10px 14px;margin:0 20px;font-size:12px;color:var(--yellow);text-align:center;';
+      warn.innerHTML = '⚠️ Live price unavailable via this interface. <b>Download the HTML file</b> and open in your browser for real-time data.';
+      const loading = document.querySelector('.loading');
+      if (loading) loading.appendChild(warn);
+    }
+    const raw = await toJSON(mkSinglePrompt(t, liveData));
+    const parsed = extractJSON(raw);
+    // Always inject live price if we got it
+    if (liveData?.price && liveData.price !== '—') {
+      parsed.current_price = '$' + liveData.price;
+      parsed.live_change = liveData.change;
+      parsed.live_changePct = liveData.changePct;
+      parsed.live_high52 = liveData.high52;
+      parsed.live_low52 = liveData.low52;
+      parsed.live_volume = liveData.volume;
+      parsed.live_marketCap = liveData.marketCap;
+      if (liveData.pe && liveData.pe !== '—') parsed.signals.pe_ratio.value = liveData.pe;
+      if (liveData.targetPrice && liveData.targetPrice !== '—') parsed.signals.price_target.value = liveData.targetPrice;
+    }
+    currentResult = parsed;
+    clearInterval(iv);
+    renderAnalysis(t, parsed);
+    document.getElementById('liveLabel').textContent = 'LIVE';
+  } catch (e) {
+    clearInterval(iv);
+    document.getElementById('analyzeContent').innerHTML = `<div class="err-box">⚠️ ${e.message}</div>`;
+    document.getElementById('liveLabel').textContent = 'ERROR';
+  } finally {
+    document.getElementById('runBtn').disabled = false;
+  }
+}
+
+function goPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.getElementById('nav-' + name).classList.add('active');
+}
+
+
+
+// ── Render: Loading ────────────────────────────────────────────
+function showAnalyzeLoading(ticker, steps) {
+  document.getElementById('analyzeContent').innerHTML = `
+    <div class="loading">
+      <div class="loading-sym">${ticker}</div>
+      <div class="lbar"><div class="lfill"></div></div>
+      <div class="lsteps">
+        ${steps.map((s, i) => `<div class="lstep-item${i===0?' lstep-act':''}">${i===0?'▶ '+s:'  '+s}</div>`).join('')}
+      </div>
+    </div>`;
+}
+
+// ── Render: Analysis ───────────────────────────────────────────
+function renderAnalysis(ticker, d) {
+  const sc = sc2cls(d.overall_signal);
+  const fs = d.forecasts || {};
+  const ss = d.signals || {};
+  const srcs = d.sources_used || [];
+  const tracked = watchlist.some(w => w.ticker === ticker);
+
+  const fgrid = [
+    {key:'week',     label:'1 WEEK',  acc:'var(--green)'},
+    {key:'month',    label:'1 MONTH', acc:'var(--blue)'},
+    {key:'year',     label:'1 YEAR',  acc:'var(--yellow)'},
+    {key:'five_year',label:'5 YEARS', acc:'var(--orange)'},
+  ].map(({key,label,acc}) => {
+    const f = fs[key] || {}; const fc = sc2cls(f.signal||'NEUTRAL');
+    return `<div class="fc-cell" style="--acc:${acc}">
+      <div class="fc-tf">${label}</div>
+      <div class="fc-dir ${fc}">${f.direction||'—'}</div>
+      <div class="fc-rng">${f.range||'—'}</div>
+      <div class="cbar"><div class="cfill" style="width:${f.confidence||0}%"></div></div>
+      <div class="fc-cf"><span class="${fc}">${f.signal||'NEUTRAL'}</span><span style="color:var(--t3)">${f.confidence||0}% conf</span></div>
+      ${f.reasoning?`<div class="fc-rs">${f.reasoning}</div>`:''}
+    </div>`;
+  }).join('');
+
+  const sgrid = Object.entries(ss).map(([k,v]) => {
+    const val = String(v.value||'');
+    const vc = /buy|positive|\+/i.test(val)?'bull':/sell|negative/i.test(val)?'bear':'';
+    return `<div class="sg-cell">
+      <div class="sg-n">${k.replace(/_/g,' ')}</div>
+      <div class="sg-v ${vc}">${val||'—'}</div>
+      <div class="sg-s">${v.label||''}</div>
+    </div>`;
+  }).join('');
+
+  const srcHTML = srcs.map((s,i) => `<span class="src-tag ${i<10?'on':''}">${s}</span>`).join('');
+
+  document.getElementById('analyzeContent').innerHTML = `
+  <div class="panel">
+    <div class="sh">
+      <div class="sh-top">
+        <div>
+          <div class="sh-sym">${ticker}</div>
+          <div class="sh-co">${d.company_name||''}</div>
+        </div>
+        <div class="sh-btns">
+          <button class="bsm" onclick="runAnalysis('${ticker}')">↻</button>
+          <button class="bsm btrack ${tracked?'tracked':''}" id="trackBtn" onclick="addToWatchlist()">
+            ${tracked?'✓ Tracked':'+ Track'}
+          </button>
+        </div>
+      </div>
+      <div class="sh-row">
+        <span class="badge ${sc==='bull'?'bg':sc==='bear'?'br':'by'}">${d.overall_signal||'NEUTRAL'}</span>
+        <span class="badge bb">${d.current_price||'N/A'}</span>
+        <span class="sh-date">${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
+      </div>
+    </div>
+
+    ${d.live_change !== undefined ? `
+    <div style="background:var(--s1);border:1px solid rgba(0,229,160,.2);border-radius:10px;padding:10px 16px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;">
+      <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-right:4px;">LIVE MARKET DATA</span>
+      <span style="font-family:var(--mono);font-size:12px;color:var(--t1);font-weight:700;">${d.current_price}</span>
+      <span style="font-family:var(--mono);font-size:11px;color:${parseFloat(d.live_change)>=0?'var(--green)':'var(--red)'};">${parseFloat(d.live_change)>=0?'+':''}${d.live_change} (${parseFloat(d.live_changePct)>=0?'+':''}${d.live_changePct}%)</span>
+      <span style="font-size:10px;color:var(--t3);">52W: <b style="color:var(--t2)">$${d.live_low52}</b> – <b style="color:var(--t2)">$${d.live_high52}</b></span>
+      <span style="font-size:10px;color:var(--t3);">Vol: <b style="color:var(--t2)">${d.live_volume}</b></span>
+      <span style="font-size:10px;color:var(--t3);">MCap: <b style="color:var(--t2)">${d.live_marketCap}</b></span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--green);margin-left:auto;">⚡ Yahoo Finance Live</span>
+    </div>` : `
+    <div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;gap:8px;">
+      <span>⚠️</span>
+      <span>Live price unavailable in this interface. <b>Open the downloaded HTML file in your browser</b> for real-time Yahoo Finance data.</span>
+    </div>`}
+
+    <div class="src-bar">
+      <span class="src-lbl">Sources</span>
+      ${srcHTML}
+      <span class="src-cnt">✓ ${srcs.length}+ sources</span>
+    </div>
+
+    <div class="card">
+      <div class="ch">Multi-Timeframe Forecast</div>
+      <div class="cb"><div class="fc-grid">${fgrid}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="ch">Signals</div>
+      <div class="cb"><div class="sg-grid">${sgrid}</div></div>
+    </div>
+
+    ${txtCard('Key Catalysts', d.key_catalysts, 'var(--green)')}
+    ${txtCard('Key Risks', d.key_risks, 'var(--red)')}
+    ${txtCard('Full Analysis', d.full_analysis, 'var(--blue)')}
+  </div>`;
+
+  setTimeout(() => {
+    document.querySelectorAll('.cfill').forEach(el => {
+      const w = el.style.width; el.style.width = '0';
+      setTimeout(() => el.style.width = w, 60);
+    });
+  }, 100);
+}
+
+function txtCard(title, text, acc) {
+  if (!text) return '';
+  return `<div class="card" style="--accent:${acc};border-top:2px solid ${acc}40">
+    <div class="ch" style="--accent:${acc}">${title}</div>
+    <div class="cb" style="font-size:13px;line-height:1.8;color:var(--t2)">${text}</div>
+  </div>`;
+}
+
+
+
+
+
+// ── Watchlist ──────────────────────────────────────────────────
+function addToWatchlist() {
+  if (!currentResult || !currentTicker) return;
+  if (watchlist.some(w => w.ticker === currentTicker)) return;
+  watchlist.unshift({
+    ticker: currentTicker,
+    company: currentResult.company_name || currentTicker,
+    signal: currentResult.overall_signal || 'NEUTRAL',
+    weekForecast: currentResult.forecasts?.week?.direction || '—',
+    monthForecast: currentResult.forecasts?.month?.direction || '—',
+    yearForecast: currentResult.forecasts?.year?.direction || '—',
+    price: currentResult.current_price || '—',
+    date: new Date().toLocaleDateString('en-US', {month:'short', day:'numeric'}),
+    data: currentResult,
+  });
+  watchlist = watchlist.slice(0, 20);
+  localStorage.setItem('so_wl2', JSON.stringify(watchlist));
+  renderWatchlist();
+  const btn = document.getElementById('trackBtn');
+  if (btn) { btn.textContent = '✓ Tracked'; btn.classList.add('tracked'); }
+}
+
+function removeFromWatchlist(ticker) {
+  watchlist = watchlist.filter(w => w.ticker !== ticker);
+  localStorage.setItem('so_wl2', JSON.stringify(watchlist));
+  renderWatchlist();
+}
+
+function renderWatchlist() {
+  document.getElementById('wlBadge').textContent = watchlist.length;
+  document.getElementById('wlSubtitle').textContent = watchlist.length + ' stock' + (watchlist.length !== 1 ? 's' : '') + ' tracked';
+
+  const tbl = document.getElementById('wlTable');
+  if (watchlist.length === 0) {
+    tbl.innerHTML = '<div class="wl-empty-msg">No stocks tracked yet.<br>Analyze a ticker and press <b style="color:var(--green)">+ Track</b> to add it here.</div>';
+    return;
+  }
+
+  tbl.innerHTML = `
+    <div class="wl-row wl-thead">
+      <div>Ticker</div><div>Company</div>
+      <div class="wl-col-wk">1 Week</div>
+      <div class="wl-col-mo">1 Month</div>
+      <div class="wl-col-yr">1 Year</div>
+      <div>Signal</div><div>Accuracy</div><div></div>
+    </div>` +
+    watchlist.map(w => {
+      const sc = sc2cls(w.signal);
+      return `<div class="wl-row">
+        <div class="wl-tick" onclick="goAnalyze('${w.ticker}')">${w.ticker}</div>
+        <div class="wl-co">${w.company}</div>
+        <div class="wl-col-wk" style="font-family:var(--mono);font-size:12px" class="${sc}">${w.weekForecast}</div>
+        <div class="wl-col-mo" style="font-family:var(--mono);font-size:12px">${w.monthForecast||'—'}</div>
+        <div class="wl-col-yr" style="font-family:var(--mono);font-size:12px">${w.yearForecast||'—'}</div>
+        <div><span class="badge ${sc==='bull'?'bg':sc==='bear'?'br':'by'}" style="font-size:9px">${w.signal}</span></div>
+        <div>
+          <button class="btn-acc" id="acc-btn-${w.ticker}" onclick="checkAccuracy('${w.ticker}')">⚡ Check</button>
+        </div>
+        <div><button class="wl-rm" onclick="removeFromWatchlist('${w.ticker}')">✕</button></div>
+      </div>
+      <div id="acc-result-${w.ticker}" style="display:none;padding:0 16px 12px;"></div>`;
+    }).join('');
+}
+
+// ── Check Accuracy ────────────────────────────────────────────
+async function checkAccuracy(ticker) {
+  const entry = watchlist.find(w => w.ticker === ticker);
+  if (!entry) return;
+
+  const btn = document.getElementById('acc-btn-' + ticker);
+  const resultDiv = document.getElementById('acc-result-' + ticker);
+  if (!btn || !resultDiv) return;
+
+  btn.disabled = true;
+  btn.textContent = '⏳…';
+  resultDiv.style.display = 'block';
+  resultDiv.innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--t3);padding:8px 0">Fetching current price…</div>';
+
+  const addedDate = entry.date || 'recently';
+  const forecasts = entry.data?.forecasts || {};
+
+  const prompt = `Today is ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}.
+Use your best knowledge of ${ticker}'s recent price action. Estimate the current approximate price and recent % changes over the past week and month.
+
+Compare to these forecasts that were made on ${addedDate}:
+- 1 Week forecast: ${forecasts.week?.direction || 'N/A'} (range ${forecasts.week?.range || 'N/A'})
+- 1 Month forecast: ${forecasts.month?.direction || 'N/A'} (range ${forecasts.month?.range || 'N/A'})  
+- 1 Year forecast: ${forecasts.year?.direction || 'N/A'} (range ${forecasts.year?.range || 'N/A'})
+- 5 Year forecast: ${forecasts.five_year?.direction || 'N/A'} (range ${forecasts.five_year?.range || 'N/A'})
+
+Reply with ONLY a JSON object. Start with { end with }. No markdown.
+
+{"current_price":"$XXX.XX","checked_date":"${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}","results":[{"timeframe":"1 Week","forecast":"${forecasts.week?.direction||'N/A'}","forecast_range":"${forecasts.week?.range||'N/A'}","actual_change":"actual % change if known or Pending","verdict":"HIT or MISS or CLOSE or PENDING","note":"one sentence explanation"},{"timeframe":"1 Month","forecast":"${forecasts.month?.direction||'N/A'}","forecast_range":"${forecasts.month?.range||'N/A'}","actual_change":"actual % change if known or Pending","verdict":"HIT or MISS or CLOSE or PENDING","note":"one sentence explanation"},{"timeframe":"1 Year","forecast":"${forecasts.year?.direction||'N/A'}","forecast_range":"${forecasts.year?.range||'N/A'}","actual_change":"Pending — too early","verdict":"PENDING","note":"Not enough time has passed to evaluate."},{"timeframe":"5 Years","forecast":"${forecasts.five_year?.direction||'N/A'}","forecast_range":"${forecasts.five_year?.range||'N/A'}","actual_change":"Pending — too early","verdict":"PENDING","note":"Long-term forecast cannot yet be evaluated."}],"accuracy_score":"X/4 forecasts evaluable","summary":"One sentence overall accuracy summary."}`;
+
+  try {
+    const raw = await toJSON(prompt);
+    const parsed = extractJSON(raw);
+    renderAccuracy(ticker, parsed);
+  } catch(e) {
+    resultDiv.innerHTML = `<div style="color:var(--red);font-size:11px;padding:8px 0">⚠️ ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ Check';
+  }
+}
+
+function renderAccuracy(ticker, data) {
+  const resultDiv = document.getElementById('acc-result-' + ticker);
+  if (!resultDiv) return;
+
+  const verdictClass = v => v==='HIT'?'acc-hit':v==='MISS'?'acc-miss':v==='CLOSE'?'acc-close':'acc-pending';
+  const verdictIcon  = v => v==='HIT'?'✓ HIT':v==='MISS'?'✗ MISS':v==='CLOSE'?'~ CLOSE':'⏳ PENDING';
+
+  const rows = (data.results||[]).map(r => `
+    <div class="acc-row">
+      <span class="acc-tf">${r.timeframe}</span>
+      <span class="acc-forecast">${r.forecast} · ${r.forecast_range}</span>
+      <span class="acc-actual">${r.actual_change}</span>
+      <span class="acc-verdict ${verdictClass(r.verdict)}">${verdictIcon(r.verdict)}</span>
+    </div>`).join('');
+
+  resultDiv.innerHTML = `
+    <div class="acc-result">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase">Accuracy Check · ${data.checked_date||''}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--blue)">${ticker} · ${data.current_price||''}</span>
+      </div>
+      ${rows}
+      <div class="acc-score">${data.accuracy_score||''} · ${data.summary||''}</div>
+    </div>`;
+}
+
+function sc2cls(s) {
+  return s === 'BULLISH' ? 'bull' : s === 'BEARISH' ? 'bear' : 'neut';
+}
+</script>
+</body>
+</html>
