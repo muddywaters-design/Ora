@@ -422,8 +422,9 @@ function extractJSON(raw) {
 function mkSinglePrompt(ticker, liveData, fgData) {
   const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const price = liveData?.price ? `Current price: $${liveData.price} (${liveData.change>=0?'+':''}${liveData.change}, ${liveData.changePct}%). 52W: $${liveData.low52}-$${liveData.high52}. Vol: ${liveData.volume}. MCap: ${liveData.marketCap}. PE: ${liveData.pe}. Target: ${liveData.targetPrice}.` : '';
+  const techs = liveData?.rsi && liveData.rsi!=='—' ? `RSI(14):${liveData.rsi} MACD:${liveData.macd} Signal:${liveData.macdSignal} BB:${liveData.bb_lower}-${liveData.bb_mid}-${liveData.bb_upper} Put/Call:${liveData.putCallRatio}.` : '';
   const fg = fgData ? `Fear&Greed: ${fgData.score}/100 (${fgData.rating}).` : '';
-  return `${d}. Analyze ${ticker}. ${price} ${fg}
+  return `${d}. Analyze ${ticker}. ${price} ${techs} ${fg}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"X"},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
@@ -483,6 +484,40 @@ async function fetchLivePrice(ticker) {
         }
       } catch(_) {}
 
+      // Fetch technicals (90 days of daily data for RSI/MACD/Bollinger)
+      let rsi='—', macd='—', macdSignal='—', bb_upper='—', bb_lower='—', bb_mid='—', putCallRatio='—';
+      try {
+        const url3 = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=3mo`;
+        const r3 = await fetch(proxy + encodeURIComponent(url3), {signal: AbortSignal.timeout(8000)});
+        if (r3.ok) {
+          const d3 = await r3.json();
+          const closes = d3?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [];
+          if (closes.length >= 20) {
+            rsi      = calcRSI(closes).toFixed(1);
+            const {macdLine, signalLine} = calcMACD(closes);
+            macd      = macdLine.toFixed(3);
+            macdSignal= signalLine.toFixed(3);
+            const {upper,lower,mid} = calcBollinger(closes);
+            bb_upper  = upper.toFixed(2);
+            bb_lower  = lower.toFixed(2);
+            bb_mid    = mid.toFixed(2);
+          }
+        }
+      } catch(_) {}
+
+      // Fetch options Put/Call ratio
+      try {
+        const url4 = `https://query1.finance.yahoo.com/v7/finance/options/${ticker}`;
+        const r4 = await fetch(proxy + encodeURIComponent(url4), {signal: AbortSignal.timeout(8000)});
+        if (r4.ok) {
+          const d4 = await r4.json();
+          const chain = d4?.optionChain?.result?.[0];
+          const puts  = chain?.options?.[0]?.puts?.length  || 0;
+          const calls = chain?.options?.[0]?.calls?.length || 0;
+          putCallRatio = calls > 0 ? (puts/calls).toFixed(2) : '—';
+        }
+      } catch(_) {}
+
       return {
         price: price.toFixed(2), change, changePct,
         high52:    meta.fiftyTwoWeekHigh?.toFixed(2) || '—',
@@ -491,11 +526,52 @@ async function fetchLivePrice(ticker) {
         volume:    meta.regularMarketVolume?.toLocaleString() || '—',
         currency:  meta.currency || 'USD',
         pe, eps, targetPrice, numAnalysts,
+        rsi, macd, macdSignal, bb_upper, bb_lower, bb_mid, putCallRatio,
         source: 'Yahoo Finance (live)',
       };
     } catch(e) { console.warn('Proxy failed:', proxy, e.message); }
   }
   return null; // all failed — Claude will use its own knowledge
+}
+
+// ── Technical Indicators ──────────────────────────────────────
+function calcRSI(closes, period=14) {
+  let gains=0, losses=0;
+  for(let i=closes.length-period; i<closes.length; i++) {
+    const diff = closes[i] - closes[i-1];
+    if(diff>0) gains+=diff; else losses+=Math.abs(diff);
+  }
+  const avgGain = gains/period, avgLoss = losses/period;
+  if(avgLoss===0) return 100;
+  const rs = avgGain/avgLoss;
+  return 100 - (100/(1+rs));
+}
+
+function calcMACD(closes, fast=12, slow=26, signal=9) {
+  const emaFast = calcEMA(closes, fast);
+  const emaSlow = calcEMA(closes, slow);
+  const macdLine = emaFast - emaSlow;
+  // Signal line approximation using last 9 values
+  const macdValues = closes.slice(-slow).map((_,i,arr) => {
+    const slice = closes.slice(0, closes.length-slow+i+1);
+    return calcEMA(slice, fast) - calcEMA(slice, slow);
+  });
+  const signalLine = calcEMA(macdValues, signal);
+  return { macdLine, signalLine };
+}
+
+function calcEMA(data, period) {
+  const k = 2/(period+1);
+  let ema = data.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  for(let i=period; i<data.length; i++) ema = data[i]*k + ema*(1-k);
+  return ema;
+}
+
+function calcBollinger(closes, period=20, mult=2) {
+  const slice = closes.slice(-period);
+  const mid = slice.reduce((a,b)=>a+b,0)/period;
+  const std = Math.sqrt(slice.reduce((a,b)=>a+(b-mid)**2,0)/period);
+  return { upper: mid+mult*std, lower: mid-mult*std, mid };
 }
 
 function formatMarketCap(n) {
@@ -615,6 +691,26 @@ async function runAnalysis(sym) {
       parsed.live_marketCap = liveData.marketCap;
       if (liveData.pe && liveData.pe !== '—') parsed.signals.pe_ratio.value = liveData.pe;
       if (liveData.targetPrice && liveData.targetPrice !== '—') parsed.signals.price_target.value = liveData.targetPrice;
+      // Inject real technicals into signals
+      if (liveData.rsi && liveData.rsi !== '—') {
+        const rsiVal = parseFloat(liveData.rsi);
+        parsed.signals.rsi = { value: liveData.rsi, label: rsiVal>70?'Overbought':rsiVal<30?'Oversold':'Neutral' };
+        parsed.live_rsi = liveData.rsi;
+        parsed.live_macd = liveData.macd;
+        parsed.live_macd_signal = liveData.macdSignal;
+        parsed.live_bb_upper = liveData.bb_upper;
+        parsed.live_bb_lower = liveData.bb_lower;
+        parsed.live_bb_mid = liveData.bb_mid;
+        parsed.live_put_call = liveData.putCallRatio;
+      }
+      if (liveData.macd && liveData.macd !== '—') {
+        const bullish = parseFloat(liveData.macd) > parseFloat(liveData.macdSignal);
+        parsed.signals.macd = { value: bullish?'Positive':'Negative', label: bullish?'Above signal line':'Below signal line' };
+      }
+      if (liveData.putCallRatio && liveData.putCallRatio !== '—') {
+        const pc = parseFloat(liveData.putCallRatio);
+        parsed.signals.short_interest = { value: liveData.putCallRatio, label: pc>1.2?'Bearish options flow':pc<0.7?'Bullish options flow':'Neutral options flow' };
+      }
     }
     currentResult = parsed;
     clearInterval(iv);
@@ -718,6 +814,12 @@ function renderAnalysis(ticker, d) {
       <span style="font-size:10px;color:var(--t3);">Vol: <b style="color:var(--t2)">${d.live_volume}</b></span>
       <span style="font-size:10px;color:var(--t3);">MCap: <b style="color:var(--t2)">${d.live_marketCap}</b></span>
       <span style="font-family:var(--mono);font-size:9px;color:var(--green);margin-left:auto;">⚡ Yahoo Finance Live</span>
+      ${d.live_rsi && d.live_rsi!=='—' ? `<div style="width:100%;display:flex;gap:16px;padding-top:8px;border-top:1px solid var(--b1);margin-top:4px;flex-wrap:wrap;">
+        <span style="font-size:10px;color:var(--t3);">RSI(14): <b style="color:${parseFloat(d.live_rsi)>70?'var(--red)':parseFloat(d.live_rsi)<30?'var(--green)':'var(--t1)'}">${d.live_rsi}</b></span>
+        <span style="font-size:10px;color:var(--t3);">MACD: <b style="color:${parseFloat(d.live_macd)>parseFloat(d.live_macd_signal)?'var(--green)':'var(--red)'}">${d.live_macd}</b> / Signal: <b style="color:var(--t2)">${d.live_macd_signal}</b></span>
+        <span style="font-size:10px;color:var(--t3);">BB: <b style="color:var(--t2)">$${d.live_bb_lower}</b> – <b style="color:var(--blue)">$${d.live_bb_mid}</b> – <b style="color:var(--t2)">$${d.live_bb_upper}</b></span>
+        <span style="font-size:10px;color:var(--t3);">Put/Call: <b style="color:${parseFloat(d.live_put_call)>1.2?'var(--red)':parseFloat(d.live_put_call)<0.7?'var(--green)':'var(--t1)'}">${d.live_put_call}</b></span>
+      </div>` : ''}
     </div>` : `
     <div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;gap:8px;">
       <span>⚠️</span>
