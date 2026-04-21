@@ -878,19 +878,12 @@ async function checkAccuracy(ticker) {
   const addedDate = entry.date || 'recently';
   const forecasts = entry.data?.forecasts || {};
 
-  const prompt = `Today is ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}.
-Use your best knowledge of ${ticker}'s recent price action. Estimate the current approximate price and recent % changes over the past week and month.
-
-Compare to these forecasts that were made on ${addedDate}:
-- 1 Week forecast: ${forecasts.week?.direction || 'N/A'} (range ${forecasts.week?.range || 'N/A'})
-- 1 Month forecast: ${forecasts.month?.direction || 'N/A'} (range ${forecasts.month?.range || 'N/A'})  
-- 1 Year forecast: ${forecasts.year?.direction || 'N/A'} (range ${forecasts.year?.range || 'N/A'})
-- 5 Year forecast: ${forecasts.five_year?.direction || 'N/A'} (range ${forecasts.five_year?.range || 'N/A'})
-
-Reply with ONLY a JSON object. Start with { end with }. No markdown.
-
-{"current_price":"$XXX.XX","checked_date":"${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}","results":[{"timeframe":"1 Week","forecast":"${forecasts.week?.direction||'N/A'}","forecast_range":"${forecasts.week?.range||'N/A'}","actual_change":"actual % change if known or Pending","verdict":"HIT or MISS or CLOSE or PENDING","note":"one sentence explanation"},{"timeframe":"1 Month","forecast":"${forecasts.month?.direction||'N/A'}","forecast_range":"${forecasts.month?.range||'N/A'}","actual_change":"actual % change if known or Pending","verdict":"HIT or MISS or CLOSE or PENDING","note":"one sentence explanation"},{"timeframe":"1 Year","forecast":"${forecasts.year?.direction||'N/A'}","forecast_range":"${forecasts.year?.range||'N/A'}","actual_change":"Pending — too early","verdict":"PENDING","note":"Not enough time has passed to evaluate."},{"timeframe":"5 Years","forecast":"${forecasts.five_year?.direction||'N/A'}","forecast_range":"${forecasts.five_year?.range||'N/A'}","actual_change":"Pending — too early","verdict":"PENDING","note":"Long-term forecast cannot yet be evaluated."}],"accuracy_score":"X/4 forecasts evaluable","summary":"One sentence overall accuracy summary."}`;
-
+  const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const w=forecasts.week?.direction||'N/A', wr=forecasts.week?.range||'';
+  const m=forecasts.month?.direction||'N/A', mr=forecasts.month?.range||'';
+  const y=forecasts.year?.direction||'N/A', yr=forecasts.year?.range||'';
+  const fy=forecasts.five_year?.direction||'N/A', fyr=forecasts.five_year?.range||'';
+  const prompt = `${d}. Accuracy check for ${ticker} (forecast date: ${addedDate}). Week:${w}(${wr}) Month:${m}(${mr}) Year:${y}(${yr}) 5Y:${fy}(${fyr}). Reply ONLY JSON (no markdown): {"current_price":"$X","checked_date":"${d}","results":[{"timeframe":"1 Week","forecast":"${w}","forecast_range":"${wr}","actual_change":"X or Pending","verdict":"HIT","note":"X"},{"timeframe":"1 Month","forecast":"${m}","forecast_range":"${mr}","actual_change":"X or Pending","verdict":"HIT","note":"X"},{"timeframe":"1 Year","forecast":"${y}","forecast_range":"${yr}","actual_change":"Pending","verdict":"PENDING","note":"X"},{"timeframe":"5 Years","forecast":"${fy}","forecast_range":"${fyr}","actual_change":"Pending","verdict":"PENDING","note":"X"}],"accuracy_score":"X/4","summary":"One sentence."}` ;
   try {
     const raw = await toJSON(prompt);
     const parsed = extractJSON(raw);
