@@ -405,7 +405,7 @@ function extractJSON(raw) {
 }
 
 // ── Prompts ────────────────────────────────────────────────────
-function mkSinglePrompt(ticker, liveData) {
+function mkSinglePrompt(ticker, liveData, fgData) {
   const d = new Date().toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'});
   const live = liveData ? `
 LIVE MARKET DATA (use these exact numbers):
@@ -418,7 +418,8 @@ LIVE MARKET DATA (use these exact numbers):
 - P/E Ratio: ${liveData.pe}
 - EPS: ${liveData.eps}
 ` : '';
-  return `Today is ${d}. You are a stock analyst. Analyze ${ticker}.${live}
+  const fgContext = fgData ? `\nMARKET SENTIMENT — CNN Fear & Greed Index (live): ${fgData.score}/100 (${fgData.rating}). Prev close: ${fgData.prev}, last week: ${fgData.week}. Factor this macro sentiment into your analysis and forecasts.` : '';
+  return `Today is ${d}. You are a stock analyst. Analyze ${ticker}.${live}${fgContext}
 Use the live price above as current_price. Add your knowledge for signals, forecasts, risks and catalysts.
 Output ONLY this JSON (no markdown, start with {, end with }):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"$X","label":"X"},"pe_ratio":{"value":"${liveData?.pe||'X'}","label":"X"},"short_interest":{"value":"X%","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"X"},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
@@ -502,6 +503,54 @@ function formatMarketCap(n) {
 }
 async function fetchFundamentals() { return {}; }
 
+// ── Fear & Greed Index ────────────────────────────────────────
+async function fetchFearGreed() {
+  const proxies = [
+    'https://corsproxy.io/?',
+    'https://api.allorigins.win/raw?url=',
+  ];
+  const url = 'https://production.dataviz.cnn.io/index/fearandgreed/graphdata';
+  for (const proxy of proxies) {
+    try {
+      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(8000)});
+      if (!r.ok) continue;
+      const data = await r.json();
+      const fg = data?.fear_and_greed;
+      if (!fg) continue;
+      const score = Math.round(fg.score);
+      const rating = fg.rating; // "Fear", "Extreme Fear", "Greed", etc.
+      const prev   = Math.round(fg.previous_close || score);
+      const week   = Math.round(fg.previous_1_week || score);
+      return { score, rating, prev, week };
+    } catch(e) { console.warn('F&G failed:', e.message); }
+  }
+  return null;
+}
+
+function fgColor(score) {
+  if (score >= 75) return '#ff4466'; // Extreme Greed — overbought warning
+  if (score >= 55) return '#ff9f43'; // Greed
+  if (score >= 45) return '#ffd060'; // Neutral
+  if (score >= 25) return '#4da8ff'; // Fear
+  return '#b084ff';                  // Extreme Fear — potential buy signal
+}
+
+function fgLabel(score) {
+  if (score >= 75) return 'Extreme Greed';
+  if (score >= 55) return 'Greed';
+  if (score >= 45) return 'Neutral';
+  if (score >= 25) return 'Fear';
+  return 'Extreme Fear';
+}
+
+function fgSignal(score) {
+  if (score >= 75) return { text: 'Market overbought — elevated risk', icon: '⚠️' };
+  if (score >= 55) return { text: 'Bullish sentiment — watch for reversal', icon: '📈' };
+  if (score >= 45) return { text: 'Balanced market conditions', icon: '➡️' };
+  if (score >= 25) return { text: 'Fear present — potential opportunity', icon: '👀' };
+  return { text: 'Extreme fear — historically a buy signal', icon: '🔔' };
+}
+
 // ── Run Analysis ───────────────────────────────────────────────
 async function runAnalysis(sym) {
   const t = (sym || document.getElementById('tickerInput').value).trim().toUpperCase();
@@ -529,8 +578,14 @@ async function runAnalysis(sym) {
   }, 1600);
 
   try {
-    // Fetch live market data first
-    let liveData = await fetchLivePrice(t);
+    // Fetch live market data + Fear & Greed in parallel
+    const [liveData, fgData] = await Promise.allSettled([
+      fetchLivePrice(t),
+      fetchFearGreed(),
+    ]).then(([a,b]) => [
+      a.status==='fulfilled' ? a.value : null,
+      b.status==='fulfilled' ? b.value : null,
+    ]);
     if (!liveData) {
       // Show warning in loading area
       const warn = document.createElement('div');
@@ -540,8 +595,9 @@ async function runAnalysis(sym) {
       const loading = document.querySelector('.loading');
       if (loading) loading.appendChild(warn);
     }
-    const raw = await toJSON(mkSinglePrompt(t, liveData));
+    const raw = await toJSON(mkSinglePrompt(t, liveData, fgData));
     const parsed = extractJSON(raw);
+    if (fgData) parsed._fg = fgData;
     // Always inject live price if we got it
     if (liveData?.price && liveData.price !== '—') {
       parsed.current_price = '$' + liveData.price;
@@ -661,6 +717,38 @@ function renderAnalysis(ticker, d) {
       <span>⚠️</span>
       <span>Live price unavailable in this interface. <b>Open the downloaded HTML file in your browser</b> for real-time Yahoo Finance data.</span>
     </div>`}
+
+    ${d._fg ? `
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:12px 16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+      <div style="display:flex;flex-direction:column;gap:3px;flex-shrink:0;">
+        <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;">CNN Fear & Greed Index</span>
+        <span style="font-size:10px;color:var(--t3);">Market sentiment · Live</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex:1;">
+        <div style="position:relative;width:64px;height:64px;flex-shrink:0;">
+          <svg viewBox="0 0 64 64" style="width:64px;height:64px;transform:rotate(-90deg)">
+            <circle cx="32" cy="32" r="26" fill="none" stroke="var(--b2)" stroke-width="8"/>
+            <circle cx="32" cy="32" r="26" fill="none" stroke="${fgColor(d._fg.score)}" stroke-width="8"
+              stroke-dasharray="${Math.round(2*Math.PI*26*d._fg.score/100)} ${Math.round(2*Math.PI*26*(1-d._fg.score/100))}"
+              stroke-linecap="round"/>
+          </svg>
+          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+            <span style="font-family:var(--mono);font-size:14px;font-weight:700;color:${fgColor(d._fg.score)}">${d._fg.score}</span>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${fgColor(d._fg.score)}">${fgLabel(d._fg.score)}</span>
+          <span style="font-size:11px;color:var(--t2)">${fgSignal(d._fg.score).icon} ${fgSignal(d._fg.score).text}</span>
+          <div style="display:flex;gap:12px;margin-top:2px;">
+            <span style="font-size:10px;color:var(--t3);">Prev: <b style="color:var(--t2)">${d._fg.prev}</b></span>
+            <span style="font-size:10px;color:var(--t3);">Last week: <b style="color:var(--t2)">${d._fg.week}</b></span>
+          </div>
+        </div>
+      </div>
+      <div style="width:100%;height:6px;background:linear-gradient(90deg,#b084ff 0%,#4da8ff 25%,#ffd060 45%,#ff9f43 65%,#ff4466 100%);border-radius:3px;position:relative;">
+        <div style="position:absolute;top:-4px;left:calc(${d._fg.score}% - 7px);width:14px;height:14px;border-radius:50%;background:var(--t1);border:2px solid ${fgColor(d._fg.score)};box-shadow:0 0 6px ${fgColor(d._fg.score)};"></div>
+      </div>
+    </div>` : ''}
 
     <div class="src-bar">
       <span class="src-lbl">Sources</span>
