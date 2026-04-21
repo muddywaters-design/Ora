@@ -255,6 +255,20 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
       <input class="ti" id="tickerInput" placeholder="Enter ticker symbol: NVDA, AAPL…" maxlength="10">
       <button class="btn btn-g" id="runBtn" onclick="runAnalysis()">RUN ▶</button>
     </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+    <button class="btn" id="fgBtn" onclick="showFearGreed()"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px;font-family:var(--mono);font-size:10px;cursor:pointer;border-radius:8px;transition:all .15s;letter-spacing:.03em;"
+      onmouseover="this.style.borderColor='var(--yellow)';this.style.color='var(--yellow)'"
+      onmouseout="this.style.borderColor='var(--b2)';this.style.color='var(--t2)'">
+      😨 Fear &amp; Greed Index
+    </button>
+    <button class="btn" id="wsbBtn2" onclick="showWSB()"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px;font-family:var(--mono);font-size:10px;cursor:pointer;border-radius:8px;transition:all .15s;letter-spacing:.03em;"
+      onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'"
+      onmouseout="this.style.borderColor='var(--b2)';this.style.color='var(--t2)'">
+      🚀 WSB Top 5
+    </button>
+  </div>
   </div>
   <div class="content" id="analyzeContent">
     <div class="empty">
@@ -549,6 +563,9 @@ async function runAnalysis(sym) {
 
   // Switch to analyze page
   goPage('analyze');
+
+  // Clear immediately — wipe everything before new search
+  document.getElementById('analyzeContent').innerHTML = '';
 
   document.getElementById('runBtn').disabled = true;
   document.getElementById('liveLabel').textContent = 'FETCHING…';
@@ -910,6 +927,142 @@ function renderAccuracy(ticker, data) {
       ${rows}
       <div class="acc-score">${data.accuracy_score||''} · ${data.summary||''}</div>
     </div>`;
+}
+
+// ── Fear & Greed widget ───────────────────────────────────────
+async function showFearGreed() {
+  const btn = document.getElementById('fgBtn');
+  btn.textContent = '⏳ Loading…'; btn.disabled = true;
+  try {
+    const fg = await fetchFearGreed();
+    if (!fg) throw new Error('Could not fetch Fear & Greed data');
+    const col = fgColor(fg.score);
+    const sig = fgSignal(fg.score);
+
+    // Gradient bar needle position
+    const needle = Math.max(2, Math.min(96, fg.score));
+
+    const html = `
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">CNN Fear &amp; Greed Index</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">Live market sentiment · ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
+        </div>
+        <button onclick="this.closest('div[data-fg]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+      </div>
+      <div style="padding:20px 16px;display:flex;flex-direction:column;gap:16px;" data-fg="1">
+        <div style="display:flex;align-items:center;gap:20px;">
+          <div style="position:relative;width:80px;height:80px;flex-shrink:0;">
+            <svg viewBox="0 0 80 80" style="width:80px;height:80px;transform:rotate(-90deg)">
+              <circle cx="40" cy="40" r="32" fill="none" stroke="var(--b2)" stroke-width="10"/>
+              <circle cx="40" cy="40" r="32" fill="none" stroke="${col}" stroke-width="10"
+                stroke-dasharray="${(2*Math.PI*32*fg.score/100).toFixed(1)} ${(2*Math.PI*32).toFixed(1)}"
+                stroke-linecap="round"/>
+            </svg>
+            <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+              <span style="font-family:var(--mono);font-size:18px;font-weight:700;color:${col}">${fg.score}</span>
+            </div>
+          </div>
+          <div style="flex:1;">
+            <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:${col};margin-bottom:6px;">${fgLabel(fg.score)}</div>
+            <div style="font-size:12px;color:var(--t2);line-height:1.5;">${sig.icon} ${sig.text}</div>
+            <div style="display:flex;gap:16px;margin-top:8px;">
+              <span style="font-size:11px;color:var(--t3);">Yesterday: <b style="color:var(--t2)">${fg.prev}</b></span>
+              <span style="font-size:11px;color:var(--t3);">Last week: <b style="color:var(--t2)">${fg.week}</b></span>
+            </div>
+          </div>
+        </div>
+        <div style="position:relative;padding-bottom:14px;">
+          <div style="height:8px;background:linear-gradient(90deg,#b084ff 0%,#4da8ff 25%,#ffd060 45%,#ff9f43 65%,#ff4466 100%);border-radius:4px;"></div>
+          <div style="position:absolute;bottom:0;left:calc(${needle}% - 8px);display:flex;flex-direction:column;align-items:center;gap:2px;">
+            <div style="width:3px;height:10px;background:var(--t1);border-radius:2px;"></div>
+            <div style="width:16px;height:16px;border-radius:50%;background:var(--t1);border:2px solid ${col};"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px;">
+            <span style="font-family:var(--mono);font-size:8px;color:var(--t3);">FEAR</span>
+            <span style="font-family:var(--mono);font-size:8px;color:var(--t3);">NEUTRAL</span>
+            <span style="font-family:var(--mono);font-size:8px;color:var(--t3);">GREED</span>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+    // Insert at top of content, remove old if exists
+    const content = document.getElementById('analyzeContent');
+    const existing = content.querySelector('[data-fg-widget]');
+    if (existing) existing.remove();
+    const wrapper = document.createElement('div');
+    wrapper.setAttribute('data-fg-widget','1');
+    wrapper.style.cssText = 'padding:14px 14px 0;';
+    wrapper.innerHTML = html;
+    // Fix: close button needs parent with data-fg attr
+    content.insertBefore(wrapper, content.firstChild);
+  } catch(e) {
+    alert('⚠️ ' + e.message);
+  } finally {
+    btn.textContent = '😨 Fear & Greed Index'; btn.disabled = false;
+  }
+}
+
+// ── WSB Top 5 ─────────────────────────────────────────────────
+async function showWSB() {
+  const btn = document.getElementById('wsbBtn2');
+  btn.textContent = '⏳ Loading…'; btn.disabled = true;
+  try {
+    const prompt = `Today is ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}. List the 5 most discussed stocks on r/WallStreetBets right now based on your latest knowledge. Reply ONLY with JSON (no markdown):
+{"tickers":[{"rank":1,"ticker":"X","company":"X","mentions":"~X","sentiment":"Bullish","sentiment_pct":80,"top_thesis":"One sentence.","heat":"🔥🔥🔥"},{"rank":2,"ticker":"X","company":"X","mentions":"~X","sentiment":"Mixed","sentiment_pct":55,"top_thesis":"One sentence.","heat":"🔥🔥"},{"rank":3,"ticker":"X","company":"X","mentions":"~X","sentiment":"Bullish","sentiment_pct":70,"top_thesis":"One sentence.","heat":"🔥🔥"},{"rank":4,"ticker":"X","company":"X","mentions":"~X","sentiment":"Bullish","sentiment_pct":65,"top_thesis":"One sentence.","heat":"🔥"},{"rank":5,"ticker":"X","company":"X","mentions":"~X","sentiment":"Bullish","sentiment_pct":60,"top_thesis":"One sentence.","heat":"🔥"}]}`;
+
+    const raw = await toJSON(prompt);
+    const data = extractJSON(raw);
+
+    const rows = (data.tickers||[]).map(t => {
+      const col = t.sentiment==='Bullish'?'var(--green)':t.sentiment==='Bearish'?'var(--red)':'var(--yellow)';
+      return `<div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;gap:10px;align-items:flex-start;">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--t3);padding-top:2px;width:18px;flex-shrink:0;">#${t.rank}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+            <span onclick="document.getElementById('tickerInput').value='${t.ticker}';runAnalysis('${t.ticker}')"
+              style="font-family:var(--mono);font-size:15px;font-weight:700;color:var(--orange);cursor:pointer;">${t.ticker}</span>
+            <span style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${t.company}</span>
+            <span style="font-size:14px;flex-shrink:0;">${t.heat}</span>
+          </div>
+          <div style="font-size:11px;color:var(--t2);margin-bottom:4px;line-height:1.4;">${t.top_thesis}</div>
+          <div style="display:flex;gap:10px;">
+            <span style="font-family:var(--mono);font-size:9px;color:var(--t3);">${t.mentions} mentions</span>
+            <span style="font-family:var(--mono);font-size:9px;color:${col};font-weight:700;">${t.sentiment} ${t.sentiment_pct}%</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+
+    const html = `<div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--b1);background:rgba(255,159,67,.06);display:flex;align-items:center;justify-content:space-between;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:18px;">🚀</span>
+          <div>
+            <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--orange);">r/WallStreetBets · Top 5</div>
+            <div style="font-size:10px;color:var(--t3);">Tap ticker to analyze</div>
+          </div>
+        </div>
+        <button onclick="this.closest('[data-wsb-widget]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+      </div>
+      ${rows}
+    </div>`;
+
+    const content = document.getElementById('analyzeContent');
+    const existing = content.querySelector('[data-wsb-widget]');
+    if (existing) existing.remove();
+    const wrapper = document.createElement('div');
+    wrapper.setAttribute('data-wsb-widget','1');
+    wrapper.style.cssText = 'padding:14px 14px 0;';
+    wrapper.innerHTML = html;
+    content.insertBefore(wrapper, content.firstChild);
+  } catch(e) {
+    alert('⚠️ ' + e.message);
+  } finally {
+    btn.textContent = '🚀 WSB Top 5'; btn.disabled = false;
+  }
 }
 
 function sc2cls(s) {
