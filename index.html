@@ -1028,73 +1028,102 @@ function renderAccuracy(ticker, data) {
 async function showFearGreed() {
   const btn = document.getElementById('fgBtn');
   btn.textContent = '⏳ Loading…'; btn.disabled = true;
+
+  const content = document.getElementById('analyzeContent');
+  const existing = content.querySelector('[data-fg-widget]');
+  if (existing) existing.remove();
+
+  // Show skeleton while loading
+  const skeleton = document.createElement('div');
+  skeleton.setAttribute('data-fg-widget','1');
+  skeleton.style.cssText = 'padding:14px 14px 0;';
+  skeleton.innerHTML = `<div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:24px;text-align:center;color:var(--t3);font-family:var(--mono);font-size:11px;">😨 Fetching market sentiment & recommendations…</div>`;
+  content.insertBefore(skeleton, content.firstChild);
+
   try {
     const fg = await fetchFearGreed();
     if (!fg) throw new Error('Could not fetch Fear & Greed data');
-    const col = fgColor(fg.score);
-    const sig = fgSignal(fg.score);
 
-    // Gradient bar needle position
+    // Ask Claude for 5 stock recommendations based on F&G score
+    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const prompt = `${d}. CNN Fear & Greed Index is ${fg.score}/100 (${fg.rating}). Based on this market sentiment, recommend 5 stocks for 5 risk levels. Reply ONLY JSON:
+{"stocks":[{"risk_level":"Very Low","risk_icon":"🟢","ticker":"X","company":"X","why":"One sentence why this fits current sentiment.","expected_return":"~X%"},{"risk_level":"Low","risk_icon":"🔵","ticker":"X","company":"X","why":"One sentence.","expected_return":"~X%"},{"risk_level":"Medium","risk_icon":"🟡","ticker":"X","company":"X","why":"One sentence.","expected_return":"~X%"},{"risk_level":"High","risk_icon":"🟠","ticker":"X","company":"X","why":"One sentence.","expected_return":"~X%"},{"risk_level":"Very High","risk_icon":"🔴","ticker":"X","company":"X","why":"One sentence.","expected_return":"~X%"}]}`;
+
+    const raw = await toJSON(prompt);
+    const recs = extractJSON(raw);
+
+    const col    = fgColor(fg.score);
+    const sig    = fgSignal(fg.score);
     const needle = Math.max(2, Math.min(96, fg.score));
+
+    const recRows = (recs.stocks||[]).map(s => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b1);">
+        <span style="font-size:16px;flex-shrink:0;">${s.risk_icon}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+            <span onclick="document.getElementById('tickerInput').value='${s.ticker}';runAnalysis('${s.ticker}')"
+              style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--blue);cursor:pointer;">${s.ticker}</span>
+            <span style="font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${s.company}</span>
+            <span style="font-family:var(--mono);font-size:10px;color:var(--green);flex-shrink:0;">${s.expected_return}</span>
+          </div>
+          <div style="font-size:10px;color:var(--t3);">${s.risk_level} Risk · ${s.why}</div>
+        </div>
+      </div>`).join('');
 
     const html = `
     <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
       <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
         <div>
-          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">CNN Fear &amp; Greed Index</div>
-          <div style="font-size:10px;color:var(--t3);margin-top:2px;">Live market sentiment · ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">😨 Fear & Greed · Stock Picks</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">Based on live market sentiment · ${d}</div>
         </div>
-        <button onclick="this.closest('div[data-fg]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+        <button onclick="this.closest('[data-fg-widget]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
       </div>
-      <div style="padding:20px 16px;display:flex;flex-direction:column;gap:16px;" data-fg="1">
-        <div style="display:flex;align-items:center;gap:20px;">
-          <div style="position:relative;width:80px;height:80px;flex-shrink:0;">
-            <svg viewBox="0 0 80 80" style="width:80px;height:80px;transform:rotate(-90deg)">
-              <circle cx="40" cy="40" r="32" fill="none" stroke="var(--b2)" stroke-width="10"/>
-              <circle cx="40" cy="40" r="32" fill="none" stroke="${col}" stroke-width="10"
-                stroke-dasharray="${(2*Math.PI*32*fg.score/100).toFixed(1)} ${(2*Math.PI*32).toFixed(1)}"
-                stroke-linecap="round"/>
-            </svg>
-            <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
-              <span style="font-family:var(--mono);font-size:18px;font-weight:700;color:${col}">${fg.score}</span>
-            </div>
-          </div>
-          <div style="flex:1;">
-            <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:${col};margin-bottom:6px;">${fgLabel(fg.score)}</div>
-            <div style="font-size:12px;color:var(--t2);line-height:1.5;">${sig.icon} ${sig.text}</div>
-            <div style="display:flex;gap:16px;margin-top:8px;">
-              <span style="font-size:11px;color:var(--t3);">Yesterday: <b style="color:var(--t2)">${fg.prev}</b></span>
-              <span style="font-size:11px;color:var(--t3);">Last week: <b style="color:var(--t2)">${fg.week}</b></span>
-            </div>
+
+      <!-- F&G gauge row -->
+      <div style="padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:16px;">
+        <div style="position:relative;width:64px;height:64px;flex-shrink:0;">
+          <svg viewBox="0 0 64 64" style="width:64px;height:64px;transform:rotate(-90deg)">
+            <circle cx="32" cy="32" r="26" fill="none" stroke="var(--b2)" stroke-width="8"/>
+            <circle cx="32" cy="32" r="26" fill="none" stroke="${col}" stroke-width="8"
+              stroke-dasharray="${(2*Math.PI*26*fg.score/100).toFixed(1)} ${(2*Math.PI*26).toFixed(1)}"
+              stroke-linecap="round"/>
+          </svg>
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+            <span style="font-family:var(--mono);font-size:14px;font-weight:700;color:${col}">${fg.score}</span>
           </div>
         </div>
-        <div style="position:relative;padding-bottom:14px;">
-          <div style="height:8px;background:linear-gradient(90deg,#b084ff 0%,#4da8ff 25%,#ffd060 45%,#ff9f43 65%,#ff4466 100%);border-radius:4px;"></div>
-          <div style="position:absolute;bottom:0;left:calc(${needle}% - 8px);display:flex;flex-direction:column;align-items:center;gap:2px;">
-            <div style="width:3px;height:10px;background:var(--t1);border-radius:2px;"></div>
-            <div style="width:16px;height:16px;border-radius:50%;background:var(--t1);border:2px solid ${col};"></div>
+        <div style="flex:1;">
+          <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${col};margin-bottom:4px;">${fgLabel(fg.score)}</div>
+          <div style="font-size:11px;color:var(--t2);margin-bottom:6px;">${sig.icon} ${sig.text}</div>
+          <div style="height:6px;background:linear-gradient(90deg,#b084ff 0%,#4da8ff 25%,#ffd060 45%,#ff9f43 65%,#ff4466 100%);border-radius:3px;position:relative;">
+            <div style="position:absolute;top:-3px;left:calc(${needle}% - 6px);width:12px;height:12px;border-radius:50%;background:var(--t1);border:2px solid ${col};"></div>
           </div>
-          <div style="display:flex;justify-content:space-between;margin-top:4px;">
+          <div style="display:flex;justify-content:space-between;margin-top:3px;">
             <span style="font-family:var(--mono);font-size:8px;color:var(--t3);">FEAR</span>
-            <span style="font-family:var(--mono);font-size:8px;color:var(--t3);">NEUTRAL</span>
             <span style="font-family:var(--mono);font-size:8px;color:var(--t3);">GREED</span>
           </div>
         </div>
       </div>
+
+      <!-- Recommendations -->
+      <div style="padding:12px 16px;">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;">
+          Recommended picks for current sentiment · Tap ticker to analyze
+        </div>
+        ${recRows}
+      </div>
     </div>`;
 
-    // Insert at top of content, remove old if exists
-    const content = document.getElementById('analyzeContent');
-    const existing = content.querySelector('[data-fg-widget]');
-    if (existing) existing.remove();
+    existing && existing.remove();
     const wrapper = document.createElement('div');
     wrapper.setAttribute('data-fg-widget','1');
     wrapper.style.cssText = 'padding:14px 14px 0;';
     wrapper.innerHTML = html;
-    // Fix: close button needs parent with data-fg attr
-    content.insertBefore(wrapper, content.firstChild);
+    skeleton.replaceWith(wrapper);
+
   } catch(e) {
-    alert('⚠️ ' + e.message);
+    skeleton.innerHTML = `<div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:14px;color:var(--red);font-size:12px;">⚠️ ${e.message}</div>`;
   } finally {
     btn.textContent = '😨 Fear & Greed Index'; btn.disabled = false;
   }
