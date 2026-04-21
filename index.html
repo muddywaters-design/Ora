@@ -389,7 +389,7 @@ async function searchThenSummarize(prompt, maxTokens) {
 }
 
 async function toJSON(prompt) {
-  const d = await apiCall([{ role: 'user', content: prompt }], false, 2000);
+  const d = await apiCall([{ role: 'user', content: prompt }], false, 1500);
   return d.content.filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
@@ -406,23 +406,12 @@ function extractJSON(raw) {
 
 // ── Prompts ────────────────────────────────────────────────────
 function mkSinglePrompt(ticker, liveData, fgData) {
-  const d = new Date().toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'});
-  const live = liveData ? `
-LIVE MARKET DATA (use these exact numbers):
-- Current Price: $${liveData.price}
-- Change today: ${liveData.change} (${liveData.changePct}%)
-- 52-week High: $${liveData.high52}
-- 52-week Low: $${liveData.low52}
-- Market Cap: ${liveData.marketCap}
-- Volume: ${liveData.volume}
-- P/E Ratio: ${liveData.pe}
-- EPS: ${liveData.eps}
-` : '';
-  const fgContext = fgData ? `\nMARKET SENTIMENT — CNN Fear & Greed Index (live): ${fgData.score}/100 (${fgData.rating}). Prev close: ${fgData.prev}, last week: ${fgData.week}. Factor this macro sentiment into your analysis and forecasts.` : '';
-  return `Today is ${d}. You are a stock analyst. Analyze ${ticker}.${live}${fgContext}
-Use the live price above as current_price. Add your knowledge for signals, forecasts, risks and catalysts.
-Output ONLY this JSON (no markdown, start with {, end with }):
-{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"$X","label":"X"},"pe_ratio":{"value":"${liveData?.pe||'X'}","label":"X"},"short_interest":{"value":"X%","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"X"},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
+  const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const price = liveData?.price ? `Current price: $${liveData.price} (${liveData.change>=0?'+':''}${liveData.change}, ${liveData.changePct}%). 52W: $${liveData.low52}-$${liveData.high52}. Vol: ${liveData.volume}. MCap: ${liveData.marketCap}. PE: ${liveData.pe}. Target: ${liveData.targetPrice}.` : '';
+  const fg = fgData ? `Fear&Greed: ${fgData.score}/100 (${fgData.rating}).` : '';
+  return `${d}. Analyze ${ticker}. ${price} ${fg}
+Reply with ONLY JSON (no markdown):
+{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"X"},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
 
 function mkResearchPrompt(ticker) { return mkSinglePrompt(ticker, null); }
