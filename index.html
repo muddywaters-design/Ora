@@ -255,13 +255,8 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
       <input class="ti" id="tickerInput" placeholder="Enter ticker symbol: NVDA, AAPL…" maxlength="10">
       <button class="btn btn-g" id="runBtn" onclick="runAnalysis()">RUN ▶</button>
     </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-    <button class="btn" id="fgBtn" onclick="showFearGreed()"
-      style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px;font-family:var(--mono);font-size:10px;cursor:pointer;border-radius:8px;transition:all .15s;letter-spacing:.03em;"
-      onmouseover="this.style.borderColor='var(--yellow)';this.style.color='var(--yellow)'"
-      onmouseout="this.style.borderColor='var(--b2)';this.style.color='var(--t2)'">
-      😨 Fear &amp; Greed Index
-    </button>
+  <div style="display:grid;grid-template-columns:1fr;gap:8px;">
+
     <button class="btn" id="wsbBtn2" onclick="showWSB()"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px;font-family:var(--mono);font-size:10px;cursor:pointer;border-radius:8px;transition:all .15s;letter-spacing:.03em;"
       onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'"
@@ -423,8 +418,10 @@ function mkSinglePrompt(ticker, liveData, fgData) {
   const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const price = liveData?.price ? `Current price: $${liveData.price} (${liveData.change>=0?'+':''}${liveData.change}, ${liveData.changePct}%). 52W: $${liveData.low52}-$${liveData.high52}. Vol: ${liveData.volume}. MCap: ${liveData.marketCap}. PE: ${liveData.pe}. Target: ${liveData.targetPrice}.` : '';
   const techs = liveData?.rsi && liveData.rsi!=='—' ? `RSI(14):${liveData.rsi} MACD:${liveData.macd} Signal:${liveData.macdSignal} BB:${liveData.bb_lower}-${liveData.bb_mid}-${liveData.bb_upper} Put/Call:${liveData.putCallRatio}.` : '';
+  const volCtx = liveData?.volumeSignal && liveData.volumeSignal!=='—' ? `Volume:${liveData.volume}(${liveData.volumeSignal} vs 20d avg ${liveData.avgVolume},ratio ${liveData.volumeRatio}x).` : '';
+  const earnCtx = liveData?.earningsSurprise && liveData.earningsSurprise!=='—' ? `Earnings:${liveData.earningsSurprise},${liveData.earningsTrend}${liveData.nextEarnings!=='—'?`,next:${liveData.nextEarnings}`:''}.` : '';
   const fg = fgData ? `Fear&Greed: ${fgData.score}/100 (${fgData.rating}).` : '';
-  return `${d}. Analyze ${ticker}. ${price} ${techs} ${fg}
+  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"X"},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
@@ -518,6 +515,50 @@ async function fetchLivePrice(ticker) {
         }
       } catch(_) {}
 
+      // Volume analysis — compare today vs 20-day average
+      let volumeSignal = '—', avgVolume = '—', volumeRatio = '—';
+      try {
+        const vols = d3?.chart?.result?.[0]?.indicators?.quote?.[0]?.volume?.filter(x=>x!=null) || [];
+        if (vols.length >= 20) {
+          const todayVol = vols[vols.length-1];
+          const avg20 = vols.slice(-21,-1).reduce((a,b)=>a+b,0) / 20;
+          const ratio = todayVol / avg20;
+          avgVolume = Math.round(avg20).toLocaleString();
+          volumeRatio = ratio.toFixed(2);
+          volumeSignal = ratio >= 2 ? 'Extreme (2x+)' : ratio >= 1.5 ? 'High (1.5x+)' : ratio >= 0.8 ? 'Normal' : 'Low (<0.8x)';
+        }
+      } catch(_) {}
+
+      // Earnings history — surprise trend
+      let earningsSurprise = '—', earningsTrend = '—', nextEarnings = '—';
+      try {
+        const url5 = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=earningsHistory,calendarEvents,earningsTrend`;
+        const r5 = await fetch(proxy + encodeURIComponent(url5), {signal: AbortSignal.timeout(7000)});
+        if (r5.ok) {
+          const d5 = await r5.json();
+          const res5 = d5?.quoteSummary?.result?.[0];
+
+          // Earnings surprise history (last 4 quarters)
+          const hist = res5?.earningsHistory?.history || [];
+          if (hist.length > 0) {
+            const surprises = hist.map(q => q.surprisePercent?.raw || 0);
+            const avgSurprise = surprises.reduce((a,b)=>a+b,0) / surprises.length;
+            const beats = surprises.filter(s => s > 0).length;
+            earningsSurprise = `${beats}/${surprises.length} beats`;
+            earningsTrend = avgSurprise > 5 ? `Avg +${avgSurprise.toFixed(1)}% surprise ↑` :
+                            avgSurprise > 0 ? `Avg +${avgSurprise.toFixed(1)}% surprise` :
+                            `Avg ${avgSurprise.toFixed(1)}% miss ↓`;
+          }
+
+          // Next earnings date
+          const cal = res5?.calendarEvents?.earnings;
+          if (cal?.earningsDate?.[0]?.raw) {
+            const dt = new Date(cal.earningsDate[0].raw * 1000);
+            nextEarnings = dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+          }
+        }
+      } catch(_) {}
+
       return {
         price: price.toFixed(2), change, changePct,
         high52:    meta.fiftyTwoWeekHigh?.toFixed(2) || '—',
@@ -527,6 +568,8 @@ async function fetchLivePrice(ticker) {
         currency:  meta.currency || 'USD',
         pe, eps, targetPrice, numAnalysts,
         rsi, macd, macdSignal, bb_upper, bb_lower, bb_mid, putCallRatio,
+        avgVolume, volumeRatio, volumeSignal,
+        earningsSurprise, earningsTrend, nextEarnings,
         source: 'Yahoo Finance (live)',
       };
     } catch(e) { console.warn('Proxy failed:', proxy, e.message); }
@@ -583,66 +626,6 @@ function formatMarketCap(n) {
 async function fetchFundamentals() { return {}; }
 
 // ── Fear & Greed Index ────────────────────────────────────────
-async function fetchFearGreed() {
-  // Try CNN API via proxies first
-  const proxies = [
-    'https://corsproxy.io/?',
-    'https://api.allorigins.win/raw?url=',
-    'https://thingproxy.freeboard.io/fetch/',
-  ];
-  const url = 'https://production.dataviz.cnn.io/index/fearandgreed/graphdata';
-  for (const proxy of proxies) {
-    try {
-      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(6000)});
-      if (!r.ok) continue;
-      const data = await r.json();
-      const fg = data?.fear_and_greed;
-      if (!fg || !fg.score) continue;
-      return {
-        score: Math.round(fg.score),
-        rating: fg.rating,
-        prev:   Math.round(fg.previous_close || fg.score),
-        week:   Math.round(fg.previous_1_week || fg.score),
-        source: 'live',
-      };
-    } catch(e) { console.warn('F&G proxy failed:', proxy, e.message); }
-  }
-
-  // Fallback: ask Claude for best estimate — NO example numbers in prompt
-  try {
-    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-    const raw = await toJSON(`Today is ${d}. Based on current market conditions, what is your best estimate of the CNN Fear & Greed Index score right now? Consider recent market volatility, S&P 500 trend, VIX levels, and investor sentiment. Reply ONLY with JSON containing real estimated values (no placeholders): {"score":REAL_NUMBER_0_TO_100,"rating":"Extreme Fear or Fear or Neutral or Greed or Extreme Greed","prev":YESTERDAYS_ESTIMATE,"week":LAST_WEEK_ESTIMATE}`);
-    const parsed = extractJSON(raw);
-    if (parsed?.score && typeof parsed.score === 'number') return { ...parsed, source: 'estimated' };
-  } catch(e) { console.warn('F&G Claude fallback failed:', e.message); }
-
-  return null;
-}
-
-function fgColor(score) {
-  if (score >= 75) return '#ff4466'; // Extreme Greed — overbought warning
-  if (score >= 55) return '#ff9f43'; // Greed
-  if (score >= 45) return '#ffd060'; // Neutral
-  if (score >= 25) return '#4da8ff'; // Fear
-  return '#b084ff';                  // Extreme Fear — potential buy signal
-}
-
-function fgLabel(score) {
-  if (score >= 75) return 'Extreme Greed';
-  if (score >= 55) return 'Greed';
-  if (score >= 45) return 'Neutral';
-  if (score >= 25) return 'Fear';
-  return 'Extreme Fear';
-}
-
-function fgSignal(score) {
-  if (score >= 75) return { text: 'Market overbought — elevated risk', icon: '⚠️' };
-  if (score >= 55) return { text: 'Bullish sentiment — watch for reversal', icon: '📈' };
-  if (score >= 45) return { text: 'Balanced market conditions', icon: '➡️' };
-  if (score >= 25) return { text: 'Fear present — potential opportunity', icon: '👀' };
-  return { text: 'Extreme fear — historically a buy signal', icon: '🔔' };
-}
-
 // ── Run Analysis ───────────────────────────────────────────────
 async function runAnalysis(sym) {
   const t = (sym || document.getElementById('tickerInput').value).trim().toUpperCase();
@@ -718,6 +701,18 @@ async function runAnalysis(sym) {
       if (liveData.putCallRatio && liveData.putCallRatio !== '—') {
         const pc = parseFloat(liveData.putCallRatio);
         parsed.signals.short_interest = { value: liveData.putCallRatio, label: pc>1.2?'Bearish options flow':pc<0.7?'Bullish options flow':'Neutral options flow' };
+      }
+      // Volume signal
+      if (liveData.volumeSignal && liveData.volumeSignal !== '—') {
+        parsed.live_volume_signal  = liveData.volumeSignal;
+        parsed.live_volume_ratio   = liveData.volumeRatio;
+        parsed.live_avg_volume     = liveData.avgVolume;
+      }
+      // Earnings
+      if (liveData.earningsSurprise && liveData.earningsSurprise !== '—') {
+        parsed.live_earnings_surprise = liveData.earningsSurprise;
+        parsed.live_earnings_trend    = liveData.earningsTrend;
+        parsed.live_next_earnings     = liveData.nextEarnings;
       }
     }
     currentResult = parsed;
@@ -822,11 +817,14 @@ function renderAnalysis(ticker, d) {
       <span style="font-size:10px;color:var(--t3);">Vol: <b style="color:var(--t2)">${d.live_volume}</b></span>
       <span style="font-size:10px;color:var(--t3);">MCap: <b style="color:var(--t2)">${d.live_marketCap}</b></span>
       <span style="font-family:var(--mono);font-size:9px;color:var(--green);margin-left:auto;">⚡ Yahoo Finance Live</span>
-      ${d.live_rsi && d.live_rsi!=='—' ? `<div style="width:100%;display:flex;gap:16px;padding-top:8px;border-top:1px solid var(--b1);margin-top:4px;flex-wrap:wrap;">
+      ${d.live_rsi && d.live_rsi!=='—' ? `<div style="width:100%;display:flex;gap:14px;padding-top:8px;border-top:1px solid var(--b1);margin-top:4px;flex-wrap:wrap;">
         <span style="font-size:10px;color:var(--t3);">RSI(14): <b style="color:${parseFloat(d.live_rsi)>70?'var(--red)':parseFloat(d.live_rsi)<30?'var(--green)':'var(--t1)'}">${d.live_rsi}</b></span>
-        <span style="font-size:10px;color:var(--t3);">MACD: <b style="color:${parseFloat(d.live_macd)>parseFloat(d.live_macd_signal)?'var(--green)':'var(--red)'}">${d.live_macd}</b> / Signal: <b style="color:var(--t2)">${d.live_macd_signal}</b></span>
-        <span style="font-size:10px;color:var(--t3);">BB: <b style="color:var(--t2)">$${d.live_bb_lower}</b> – <b style="color:var(--blue)">$${d.live_bb_mid}</b> – <b style="color:var(--t2)">$${d.live_bb_upper}</b></span>
+        <span style="font-size:10px;color:var(--t3);">MACD: <b style="color:${parseFloat(d.live_macd)>parseFloat(d.live_macd_signal)?'var(--green)':'var(--red)'}">${d.live_macd}</b></span>
+        <span style="font-size:10px;color:var(--t3);">BB: <b style="color:var(--t2)">$${d.live_bb_lower}</b>–<b style="color:var(--blue)">$${d.live_bb_mid}</b>–<b style="color:var(--t2)">$${d.live_bb_upper}</b></span>
         <span style="font-size:10px;color:var(--t3);">Put/Call: <b style="color:${parseFloat(d.live_put_call)>1.2?'var(--red)':parseFloat(d.live_put_call)<0.7?'var(--green)':'var(--t1)'}">${d.live_put_call}</b></span>
+        ${d.live_volume_signal ? `<span style="font-size:10px;color:var(--t3);">Volume: <b style="color:${d.live_volume_signal.includes('Extreme')||d.live_volume_signal.includes('High')?'var(--yellow)':'var(--t1)'}">${d.live_volume_signal}</b> (${d.live_volume_ratio}x avg)</span>` : ''}
+        ${d.live_earnings_surprise ? `<span style="font-size:10px;color:var(--t3);">Earnings: <b style="color:var(--green)">${d.live_earnings_surprise}</b> · ${d.live_earnings_trend}</span>` : ''}
+        ${d.live_next_earnings && d.live_next_earnings!=='—' ? `<span style="font-size:10px;color:var(--t3);">Next: <b style="color:var(--orange)">${d.live_next_earnings}</b></span>` : ''}
       </div>` : ''}
     </div>` : `
     <div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;gap:8px;">
@@ -1003,113 +1001,6 @@ function renderAccuracy(ticker, data) {
 }
 
 // ── Fear & Greed widget ───────────────────────────────────────
-async function showFearGreed() {
-  const btn = document.getElementById('fgBtn');
-  btn.textContent = '⏳ Loading…'; btn.disabled = true;
-
-  const content = document.getElementById('analyzeContent');
-  const existing = content.querySelector('[data-fg-widget]');
-  if (existing) existing.remove();
-
-  // Show skeleton while loading
-  const skeleton = document.createElement('div');
-  skeleton.setAttribute('data-fg-widget','1');
-  skeleton.style.cssText = 'padding:14px 14px 0;';
-  skeleton.innerHTML = `<div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:24px;text-align:center;color:var(--t3);font-family:var(--mono);font-size:11px;">😨 Fetching market sentiment & recommendations…</div>`;
-  content.insertBefore(skeleton, content.firstChild);
-
-  try {
-    const fg = await fetchFearGreed();
-    if (!fg) throw new Error('Could not fetch Fear & Greed data');
-
-    // Ask Claude for 5 stock recommendations based on F&G score
-    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-    const prompt = `${d}. CNN Fear & Greed Index is ${fg.score}/100 (${fg.rating}). Based on this market sentiment, recommend 5 stocks for 5 risk levels. Reply ONLY JSON:
-{"stocks":[{"risk_level":"Very Low","risk_icon":"🟢","ticker":"X","company":"X","why":"One sentence why this fits current sentiment.","expected_return":"~X%"},{"risk_level":"Low","risk_icon":"🔵","ticker":"X","company":"X","why":"One sentence.","expected_return":"~X%"},{"risk_level":"Medium","risk_icon":"🟡","ticker":"X","company":"X","why":"One sentence.","expected_return":"~X%"},{"risk_level":"High","risk_icon":"🟠","ticker":"X","company":"X","why":"One sentence.","expected_return":"~X%"},{"risk_level":"Very High","risk_icon":"🔴","ticker":"X","company":"X","why":"One sentence.","expected_return":"~X%"}]}`;
-
-    const raw = await toJSON(prompt);
-    const recs = extractJSON(raw);
-
-    const col    = fgColor(fg.score);
-    const sig    = fgSignal(fg.score);
-    const needle = Math.max(2, Math.min(96, fg.score));
-
-    const recRows = (recs.stocks||[]).map(s => `
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b1);">
-        <span style="font-size:16px;flex-shrink:0;">${s.risk_icon}</span>
-        <div style="flex:1;min-width:0;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
-            <span onclick="document.getElementById('tickerInput').value='${s.ticker}';runAnalysis('${s.ticker}')"
-              style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--blue);cursor:pointer;">${s.ticker}</span>
-            <span style="font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${s.company}</span>
-            <span style="font-family:var(--mono);font-size:10px;color:var(--green);flex-shrink:0;">${s.expected_return}</span>
-          </div>
-          <div style="font-size:10px;color:var(--t3);">${s.risk_level} Risk · ${s.why}</div>
-        </div>
-      </div>`).join('');
-
-    const html = `
-    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
-      <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
-        <div>
-          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">😨 Fear & Greed · Stock Picks</div>
-          <div style="font-size:10px;color:var(--t3);margin-top:2px;">
-            ${fg.source==='live' ? '⚡ Live · CNN · ' : '~ AI Estimate · '}${d}
-          </div>
-        </div>
-        <button onclick="this.closest('[data-fg-widget]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
-      </div>
-
-      <!-- F&G gauge row -->
-      <div style="padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:16px;">
-        <div style="position:relative;width:64px;height:64px;flex-shrink:0;">
-          <svg viewBox="0 0 64 64" style="width:64px;height:64px;transform:rotate(-90deg)">
-            <circle cx="32" cy="32" r="26" fill="none" stroke="var(--b2)" stroke-width="8"/>
-            <circle cx="32" cy="32" r="26" fill="none" stroke="${col}" stroke-width="8"
-              stroke-dasharray="${(2*Math.PI*26*fg.score/100).toFixed(1)} ${(2*Math.PI*26).toFixed(1)}"
-              stroke-linecap="round"/>
-          </svg>
-          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
-            <span style="font-family:var(--mono);font-size:14px;font-weight:700;color:${col}">${fg.score}</span>
-          </div>
-        </div>
-        <div style="flex:1;">
-          <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${col};margin-bottom:4px;">${fgLabel(fg.score)}</div>
-          <div style="font-size:11px;color:var(--t2);margin-bottom:6px;">${sig.icon} ${sig.text}</div>
-          ${fg.source!=='live' ? '<div style="font-size:10px;color:var(--yellow);padding:4px 8px;background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.2);border-radius:6px;margin-bottom:4px;">⚠️ CNN API unavailable — score is AI estimate</div>' : ''}
-          <div style="height:6px;background:linear-gradient(90deg,#b084ff 0%,#4da8ff 25%,#ffd060 45%,#ff9f43 65%,#ff4466 100%);border-radius:3px;position:relative;">
-            <div style="position:absolute;top:-3px;left:calc(${needle}% - 6px);width:12px;height:12px;border-radius:50%;background:var(--t1);border:2px solid ${col};"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-top:3px;">
-            <span style="font-family:var(--mono);font-size:8px;color:var(--t3);">FEAR</span>
-            <span style="font-family:var(--mono);font-size:8px;color:var(--t3);">GREED</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Recommendations -->
-      <div style="padding:12px 16px;">
-        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;">
-          Recommended picks for current sentiment · Tap ticker to analyze
-        </div>
-        ${recRows}
-      </div>
-    </div>`;
-
-    existing && existing.remove();
-    const wrapper = document.createElement('div');
-    wrapper.setAttribute('data-fg-widget','1');
-    wrapper.style.cssText = 'padding:14px 14px 0;';
-    wrapper.innerHTML = html;
-    skeleton.replaceWith(wrapper);
-
-  } catch(e) {
-    skeleton.innerHTML = `<div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:14px;color:var(--red);font-size:12px;">⚠️ ${e.message}</div>`;
-  } finally {
-    btn.textContent = '😨 Fear & Greed Index'; btn.disabled = false;
-  }
-}
-
 // ── WSB Top 5 ─────────────────────────────────────────────────
 async function showWSB() {
   const btn = document.getElementById('wsbBtn2');
