@@ -584,25 +584,38 @@ async function fetchFundamentals() { return {}; }
 
 // ── Fear & Greed Index ────────────────────────────────────────
 async function fetchFearGreed() {
+  // Try CNN API via proxies first
   const proxies = [
     'https://corsproxy.io/?',
     'https://api.allorigins.win/raw?url=',
+    'https://thingproxy.freeboard.io/fetch/',
   ];
   const url = 'https://production.dataviz.cnn.io/index/fearandgreed/graphdata';
   for (const proxy of proxies) {
     try {
-      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(8000)});
+      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(6000)});
       if (!r.ok) continue;
       const data = await r.json();
       const fg = data?.fear_and_greed;
-      if (!fg) continue;
-      const score = Math.round(fg.score);
-      const rating = fg.rating; // "Fear", "Extreme Fear", "Greed", etc.
-      const prev   = Math.round(fg.previous_close || score);
-      const week   = Math.round(fg.previous_1_week || score);
-      return { score, rating, prev, week };
-    } catch(e) { console.warn('F&G failed:', e.message); }
+      if (!fg || !fg.score) continue;
+      return {
+        score: Math.round(fg.score),
+        rating: fg.rating,
+        prev:   Math.round(fg.previous_close || fg.score),
+        week:   Math.round(fg.previous_1_week || fg.score),
+        source: 'live',
+      };
+    } catch(e) { console.warn('F&G proxy failed:', proxy, e.message); }
   }
+
+  // Fallback: ask Claude for current estimate
+  try {
+    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const raw = await toJSON(`${d}. What is the current CNN Fear & Greed Index score (approximate)? Reply ONLY JSON: {"score":72,"rating":"Greed","prev":68,"week":65}`);
+    const parsed = extractJSON(raw);
+    if (parsed?.score) return { ...parsed, source: 'estimated' };
+  } catch(e) { console.warn('F&G Claude fallback failed:', e.message); }
+
   return null;
 }
 
@@ -660,14 +673,9 @@ async function runAnalysis(sym) {
   }, 1600);
 
   try {
-    // Fetch live market data + Fear & Greed in parallel
-    const [liveData, fgData] = await Promise.allSettled([
-      fetchLivePrice(t),
-      fetchFearGreed(),
-    ]).then(([a,b]) => [
-      a.status==='fulfilled' ? a.value : null,
-      b.status==='fulfilled' ? b.value : null,
-    ]);
+    // Fetch live market data only (F&G is separate via its own button)
+    const liveData = await fetchLivePrice(t);
+    const fgData = null;
     if (!liveData) {
       // Show warning in loading area
       const warn = document.createElement('div');
@@ -826,37 +834,7 @@ function renderAnalysis(ticker, d) {
       <span>Live price unavailable in this interface. <b>Open the downloaded HTML file in your browser</b> for real-time Yahoo Finance data.</span>
     </div>`}
 
-    ${d._fg ? `
-    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:12px 16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
-      <div style="display:flex;flex-direction:column;gap:3px;flex-shrink:0;">
-        <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;">CNN Fear & Greed Index</span>
-        <span style="font-size:10px;color:var(--t3);">Market sentiment · Live</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px;flex:1;">
-        <div style="position:relative;width:64px;height:64px;flex-shrink:0;">
-          <svg viewBox="0 0 64 64" style="width:64px;height:64px;transform:rotate(-90deg)">
-            <circle cx="32" cy="32" r="26" fill="none" stroke="var(--b2)" stroke-width="8"/>
-            <circle cx="32" cy="32" r="26" fill="none" stroke="${fgColor(d._fg.score)}" stroke-width="8"
-              stroke-dasharray="${Math.round(2*Math.PI*26*d._fg.score/100)} ${Math.round(2*Math.PI*26*(1-d._fg.score/100))}"
-              stroke-linecap="round"/>
-          </svg>
-          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
-            <span style="font-family:var(--mono);font-size:14px;font-weight:700;color:${fgColor(d._fg.score)}">${d._fg.score}</span>
-          </div>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:4px;">
-          <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${fgColor(d._fg.score)}">${fgLabel(d._fg.score)}</span>
-          <span style="font-size:11px;color:var(--t2)">${fgSignal(d._fg.score).icon} ${fgSignal(d._fg.score).text}</span>
-          <div style="display:flex;gap:12px;margin-top:2px;">
-            <span style="font-size:10px;color:var(--t3);">Prev: <b style="color:var(--t2)">${d._fg.prev}</b></span>
-            <span style="font-size:10px;color:var(--t3);">Last week: <b style="color:var(--t2)">${d._fg.week}</b></span>
-          </div>
-        </div>
-      </div>
-      <div style="width:100%;height:6px;background:linear-gradient(90deg,#b084ff 0%,#4da8ff 25%,#ffd060 45%,#ff9f43 65%,#ff4466 100%);border-radius:3px;position:relative;">
-        <div style="position:absolute;top:-4px;left:calc(${d._fg.score}% - 7px);width:14px;height:14px;border-radius:50%;background:var(--t1);border:2px solid ${fgColor(d._fg.score)};box-shadow:0 0 6px ${fgColor(d._fg.score)};"></div>
-      </div>
-    </div>` : ''}
+
 
     <div class="src-bar">
       <span class="src-lbl">Sources</span>
@@ -1075,7 +1053,9 @@ async function showFearGreed() {
       <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">😨 Fear & Greed · Stock Picks</div>
-          <div style="font-size:10px;color:var(--t3);margin-top:2px;">Based on live market sentiment · ${d}</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">
+            ${fg.source==='live' ? '⚡ Live · CNN · ' : '~ AI Estimate · '}${d}
+          </div>
         </div>
         <button onclick="this.closest('[data-fg-widget]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
       </div>
@@ -1096,6 +1076,7 @@ async function showFearGreed() {
         <div style="flex:1;">
           <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${col};margin-bottom:4px;">${fgLabel(fg.score)}</div>
           <div style="font-size:11px;color:var(--t2);margin-bottom:6px;">${sig.icon} ${sig.text}</div>
+          ${fg.source!=='live' ? '<div style="font-size:10px;color:var(--yellow);padding:4px 8px;background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.2);border-radius:6px;margin-bottom:4px;">⚠️ CNN API unavailable — score is AI estimate</div>' : ''}
           <div style="height:6px;background:linear-gradient(90deg,#b084ff 0%,#4da8ff 25%,#ffd060 45%,#ff9f43 65%,#ff4466 100%);border-radius:3px;position:relative;">
             <div style="position:absolute;top:-3px;left:calc(${needle}% - 6px);width:12px;height:12px;border-radius:50%;background:var(--t1);border:2px solid ${col};"></div>
           </div>
