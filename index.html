@@ -608,12 +608,12 @@ async function fetchFearGreed() {
     } catch(e) { console.warn('F&G proxy failed:', proxy, e.message); }
   }
 
-  // Fallback: ask Claude for current estimate
+  // Fallback: ask Claude for best estimate — NO example numbers in prompt
   try {
     const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-    const raw = await toJSON(`${d}. What is the current CNN Fear & Greed Index score (approximate)? Reply ONLY JSON: {"score":72,"rating":"Greed","prev":68,"week":65}`);
+    const raw = await toJSON(`Today is ${d}. Based on current market conditions, what is your best estimate of the CNN Fear & Greed Index score right now? Consider recent market volatility, S&P 500 trend, VIX levels, and investor sentiment. Reply ONLY with JSON containing real estimated values (no placeholders): {"score":REAL_NUMBER_0_TO_100,"rating":"Extreme Fear or Fear or Neutral or Greed or Extreme Greed","prev":YESTERDAYS_ESTIMATE,"week":LAST_WEEK_ESTIMATE}`);
     const parsed = extractJSON(raw);
-    if (parsed?.score) return { ...parsed, source: 'estimated' };
+    if (parsed?.score && typeof parsed.score === 'number') return { ...parsed, source: 'estimated' };
   } catch(e) { console.warn('F&G Claude fallback failed:', e.message); }
 
   return null;
