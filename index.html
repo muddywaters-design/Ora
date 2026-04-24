@@ -263,6 +263,11 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
       onmouseout="this.style.borderColor='var(--b2)';this.style.color='var(--t2)'">
       🚀 WSB Hot — Last 48h
     </button>
+    <button onclick="showScanner()"
+      style="background:linear-gradient(135deg,var(--green),var(--blue));color:var(--bg);border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;"
+      onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+      ⚡ Opportunity Scanner — Find Stocks About to Move
+    </button>
   </div>
   </div>
   <div class="content" id="analyzeContent">
@@ -1229,6 +1234,161 @@ async function showWSB() {
   } finally {
     btn.textContent = '🚀 WSB Top 5'; btn.disabled = false;
   }
+}
+
+// ── Opportunity Scanner ───────────────────────────────────────
+function showScanner() {
+  const content = document.getElementById('analyzeContent');
+  // Remove existing scanner
+  const ex = content.querySelector('[data-scanner]');
+  if (ex) { ex.remove(); return; }
+
+  const risks = [
+    { id:'conservative', label:'Conservative', icon:'🟢', desc:'Stable, dividend-paying, low beta', color:'var(--green)' },
+    { id:'moderate',     label:'Moderate',     icon:'🔵', desc:'Growth stocks, moderate volatility', color:'var(--blue)' },
+    { id:'aggressive',   label:'Aggressive',   icon:'🟡', desc:'High-growth, momentum plays',       color:'var(--yellow)' },
+    { id:'speculative',  label:'Speculative',  icon:'🟠', desc:'Small/mid cap, high reward/risk',   color:'var(--orange)' },
+    { id:'yolo',         label:'YOLO',         icon:'🔴', desc:'High volatility, short squeeze potential', color:'var(--red)' },
+  ];
+
+  const btns = risks.map(r => `
+    <button onclick="runScanner('${r.id}')"
+      style="background:var(--s2);border:1px solid var(--b2);border-radius:10px;padding:14px;cursor:pointer;text-align:left;transition:all .15s;width:100%;"
+      onmouseover="this.style.borderColor='${r.color}';this.style.background='var(--s3)'"
+      onmouseout="this.style.borderColor='var(--b2)';this.style.background='var(--s2)'">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:20px;">${r.icon}</span>
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">${r.label}</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">${r.desc}</div>
+        </div>
+        <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:${r.color};">SELECT →</span>
+      </div>
+    </button>`).join('');
+
+  const wrapper = document.createElement('div');
+  wrapper.setAttribute('data-scanner','1');
+  wrapper.style.cssText = 'padding:14px 14px 0;';
+  wrapper.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">⚡ Opportunity Scanner</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">AI identifies stocks with pre-move signals · Choose your risk level</div>
+        </div>
+        <button onclick="this.closest('[data-scanner]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+      </div>
+      <div style="padding:12px;display:flex;flex-direction:column;gap:8px;" id="scannerRiskPicker">
+        ${btns}
+      </div>
+    </div>`;
+  content.insertBefore(wrapper, content.firstChild);
+}
+
+async function runScanner(riskLevel) {
+  const picker = document.getElementById('scannerRiskPicker');
+  if (!picker) return;
+
+  const riskLabels = {
+    conservative:'Conservative (low beta, dividend, value)',
+    moderate:'Moderate (growth, strong fundamentals)',
+    aggressive:'Aggressive (high momentum, breakout candidates)',
+    speculative:'Speculative (small/mid cap, catalyst-driven)',
+    yolo:'YOLO (high short interest, squeeze potential, volatile)',
+  };
+
+  picker.innerHTML = `
+    <div style="padding:20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;">
+      <div style="font-family:var(--mono);font-size:13px;color:var(--green);">⚡ Scanning for ${riskLabels[riskLevel]}…</div>
+      <div style="width:160px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;">
+        <div style="height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:1px;animation:la 1.5s ease-in-out infinite;"></div>
+      </div>
+      <div style="font-size:10px;color:var(--t3);">Analyzing signals: RSI, Volume, Earnings, Short Interest, Momentum…</div>
+    </div>`;
+
+  const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const prompt = `${d}. You are a quantitative analyst. Identify 5 stocks that show pre-move signals and are likely to move up significantly soon, suitable for a ${riskLabels[riskLevel]} investor.
+
+For each stock, evaluate: RSI recovery from oversold, unusual volume, positive earnings surprise, analyst upgrades, short squeeze setup, momentum breakout, or sector rotation.
+
+Start with { end with }. Output ONLY this JSON:
+{"risk_level":"${riskLevel}","generated":"${d}","disclaimer":"AI analysis only — not financial advice. Always do your own research.","stocks":[{"rank":1,"ticker":"REAL_TICKER","company":"Real Company Name","current_price":"~$XX","signal_type":"Volume Spike + RSI Recovery","signal_strength":85,"why_now":"2 sentences explaining specific pre-move signals right now.","catalysts":"Upcoming catalyst or technical setup.","target_1w":"~$XX","target_1m":"~$XX","risk":"Main risk in one sentence.","confidence":72},{"rank":2,"ticker":"REAL_TICKER","company":"Real Company","current_price":"~$XX","signal_type":"Earnings Surprise + Momentum","signal_strength":78,"why_now":"2 sentences.","catalysts":"Catalyst.","target_1w":"~$XX","target_1m":"~$XX","risk":"Risk.","confidence":65},{"rank":3,"ticker":"REAL_TICKER","company":"Real Company","current_price":"~$XX","signal_type":"Short Squeeze Setup","signal_strength":71,"why_now":"2 sentences.","catalysts":"Catalyst.","target_1w":"~$XX","target_1m":"~$XX","risk":"Risk.","confidence":60},{"rank":4,"ticker":"REAL_TICKER","company":"Real Company","current_price":"~$XX","signal_type":"Analyst Upgrade + Breakout","signal_strength":68,"why_now":"2 sentences.","catalysts":"Catalyst.","target_1w":"~$XX","target_1m":"~$XX","risk":"Risk.","confidence":58},{"rank":5,"ticker":"REAL_TICKER","company":"Real Company","current_price":"~$XX","signal_type":"Sector Rotation Play","signal_strength":62,"why_now":"2 sentences.","catalysts":"Catalyst.","target_1w":"~$XX","target_1m":"~$XX","risk":"Risk.","confidence":55}]}`;
+
+  try {
+    const raw = await toJSON(prompt);
+    const data = extractJSON(raw);
+    renderScanner(data, riskLevel);
+  } catch(e) {
+    picker.innerHTML = `<div style="padding:16px;color:var(--red);font-size:12px;">⚠️ ${e.message}</div>`;
+  }
+}
+
+function renderScanner(data, riskLevel) {
+  const wrapper = document.querySelector('[data-scanner]');
+  if (!wrapper) return;
+
+  const riskColors = {
+    conservative:'var(--green)', moderate:'var(--blue)',
+    aggressive:'var(--yellow)', speculative:'var(--orange)', yolo:'var(--red)'
+  };
+  const col = riskColors[riskLevel] || 'var(--green)';
+
+  const signalStrengthBar = (s) => `
+    <div style="display:flex;align-items:center;gap:6px;">
+      <div style="flex:1;height:4px;background:var(--b2);border-radius:2px;overflow:hidden;">
+        <div style="height:100%;width:${s}%;background:${col};border-radius:2px;"></div>
+      </div>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--t3);flex-shrink:0;">${s}%</span>
+    </div>`;
+
+  const cards = (data.stocks||[]).map(s => `
+    <div style="background:var(--s2);border:1px solid var(--b1);border-radius:10px;padding:14px;border-left:3px solid ${col};">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:8px;">
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+            <span onclick="document.getElementById('tickerInput').value='${s.ticker}';runAnalysis('${s.ticker}')"
+              style="font-family:var(--mono);font-size:16px;font-weight:700;color:${col};cursor:pointer;">${s.ticker}</span>
+            <span style="font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.company}</span>
+          </div>
+          <div style="font-size:10px;color:var(--t3);">${s.current_price}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);">CONFIDENCE</div>
+          <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${col};">${s.confidence}%</div>
+        </div>
+      </div>
+      <div style="display:inline-block;padding:2px 8px;border-radius:20px;background:${col}18;border:1px solid ${col}40;font-family:var(--mono);font-size:9px;color:${col};margin-bottom:8px;">${s.signal_type}</div>
+      ${signalStrengthBar(s.signal_strength)}
+      <div style="font-size:11px;color:var(--t2);margin-top:8px;line-height:1.55;">${s.why_now}</div>
+      <div style="font-size:10px;color:var(--t3);margin-top:6px;">🎯 ${s.catalysts}</div>
+      <div style="display:flex;gap:12px;margin-top:8px;">
+        <span style="font-size:10px;color:var(--t3);">1W target: <b style="color:var(--green);font-family:var(--mono);">${s.target_1w}</b></span>
+        <span style="font-size:10px;color:var(--t3);">1M target: <b style="color:var(--blue);font-family:var(--mono);">${s.target_1m}</b></span>
+      </div>
+      <div style="font-size:10px;color:var(--red);margin-top:5px;">⚠️ ${s.risk}</div>
+    </div>`).join('');
+
+  const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  wrapper.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">⚡ Opportunity Scanner · ${data.risk_level?.toUpperCase()}</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">Generated ${d} · Tap ticker to run full analysis</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button onclick="showScanner()" style="background:none;border:1px solid var(--b2);color:var(--t3);cursor:pointer;font-size:9px;padding:4px 8px;border-radius:6px;font-family:var(--mono);">↺ Change</button>
+          <button onclick="this.closest('[data-scanner]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+        </div>
+      </div>
+      <div style="padding:12px;background:rgba(255,208,96,.05);border-bottom:1px solid var(--b1);">
+        <span style="font-size:10px;color:var(--yellow);">⚠️ ${data.disclaimer}</span>
+      </div>
+      <div style="padding:12px;display:flex;flex-direction:column;gap:10px;">
+        ${cards}
+      </div>
+    </div>`;
+  wrapper.setAttribute('data-scanner','1');
 }
 
 function sc2cls(s) {
