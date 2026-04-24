@@ -1125,20 +1125,85 @@ async function checkAccuracy(ticker) {
   btn.disabled = true;
   btn.textContent = '⏳…';
   resultDiv.style.display = 'block';
-  resultDiv.innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--t3);padding:8px 0">Fetching current price…</div>';
+  resultDiv.innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--t3);padding:8px 0">📡 Fetching real-time price from Yahoo Finance…</div>';
 
   const addedDate = entry.date || 'recently';
   const forecasts = entry.data?.forecasts || {};
+  // Price at time of forecast (saved in watchlist)
+  const forecastPrice = parseFloat((entry.data?.current_price||'').replace(/[^0-9.]/g,'')) || null;
 
-  const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  const w=forecasts.week?.direction||'N/A', wr=forecasts.week?.range||'';
-  const m=forecasts.month?.direction||'N/A', mr=forecasts.month?.range||'';
-  const y=forecasts.year?.direction||'N/A', yr=forecasts.year?.range||'';
-  const fy=forecasts.five_year?.direction||'N/A', fyr=forecasts.five_year?.range||'';
-  const prompt = `${d}. Accuracy check for ${ticker} (forecast date: ${addedDate}). Week:${w}(${wr}) Month:${m}(${mr}) Year:${y}(${yr}) 5Y:${fy}(${fyr}). Reply ONLY JSON (no markdown): {"current_price":"$X","checked_date":"${d}","results":[{"timeframe":"1 Week","forecast":"${w}","forecast_range":"${wr}","actual_change":"X or Pending","verdict":"HIT","note":"X"},{"timeframe":"1 Month","forecast":"${m}","forecast_range":"${mr}","actual_change":"X or Pending","verdict":"HIT","note":"X"},{"timeframe":"1 Year","forecast":"${y}","forecast_range":"${yr}","actual_change":"Pending","verdict":"PENDING","note":"X"},{"timeframe":"5 Years","forecast":"${fy}","forecast_range":"${fyr}","actual_change":"Pending","verdict":"PENDING","note":"X"}],"accuracy_score":"X/4","summary":"One sentence."}` ;
   try {
-    const raw = await toJSON(prompt);
-    const parsed = extractJSON(raw);
+    // Step 1: Get REAL current price from Yahoo Finance
+    const liveData = await fetchLivePrice(ticker);
+    const currentPrice = liveData ? parseFloat(liveData.price) : null;
+
+    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+
+    // Step 2: Calculate actual change if we have both prices
+    let actualChangePct = null;
+    if (currentPrice && forecastPrice) {
+      actualChangePct = ((currentPrice - forecastPrice) / forecastPrice * 100);
+    }
+
+    const w=forecasts.week?.direction||'N/A', wr=forecasts.week?.range||'';
+    const m=forecasts.month?.direction||'N/A', mr=forecasts.month?.range||'';
+    const y=forecasts.year?.direction||'N/A', yr=forecasts.year?.range||'';
+    const fy=forecasts.five_year?.direction||'N/A', fyr=forecasts.five_year?.range||'';
+
+    // Step 3: Build accuracy results using REAL price
+    const results = [];
+
+    // Helper: check if actual move is within forecast range
+    function evaluate(forecastDir, forecastRange, actualPct, timeframeDays) {
+      if (actualPct === null) return { actual:'N/A', verdict:'PENDING', note:'Could not fetch live price' };
+
+      const daysSinceForecast = Math.round((new Date() - new Date(entry.date + ' ' + new Date().getFullYear())) / 86400000);
+      if (timeframeDays > daysSinceForecast + 3) {
+        // Too early to fully evaluate — but show current trajectory
+        const trajectory = actualPct > 0 ? `+${actualPct.toFixed(2)}%` : `${actualPct.toFixed(2)}%`;
+        const forecastPct = parseFloat(forecastDir);
+        const onTrack = (forecastPct > 0 && actualPct > 0) || (forecastPct < 0 && actualPct < 0);
+        return {
+          actual: `${trajectory} so far`,
+          verdict: 'PENDING',
+          note: onTrack ? `On track — moving in forecast direction` : `Off track so far — moving opposite to forecast`
+        };
+      }
+
+      // Timeframe passed — evaluate
+      const actual = `${actualPct >= 0 ? '+' : ''}${actualPct.toFixed(2)}%`;
+      const forecastPct = parseFloat(forecastDir);
+      const dirMatch = (forecastPct > 0 && actualPct > 0) || (forecastPct < 0 && actualPct < 0);
+      const magnitude = Math.abs(actualPct - forecastPct);
+
+      if (dirMatch && magnitude <= 3) return { actual, verdict:'HIT', note:`Direction and magnitude match forecast` };
+      if (dirMatch && magnitude <= 8) return { actual, verdict:'CLOSE', note:`Direction correct, magnitude slightly off` };
+      if (dirMatch) return { actual, verdict:'CLOSE', note:`Direction correct but magnitude differs significantly` };
+      return { actual, verdict:'MISS', note:`Moved opposite to forecast direction` };
+    }
+
+    const weekResult  = evaluate(w, wr, actualChangePct, 7);
+    const monthResult = evaluate(m, mr, actualChangePct, 30);
+    const yearResult  = { actual:'Pending', verdict:'PENDING', note:'Not enough time has passed' };
+    const fyResult    = { actual:'Pending', verdict:'PENDING', note:'Long-term — cannot yet evaluate' };
+
+    const parsed = {
+      current_price: currentPrice ? `$${currentPrice.toFixed(2)}` : 'N/A',
+      forecast_price: forecastPrice ? `$${forecastPrice.toFixed(2)}` : 'N/A',
+      checked_date: d,
+      data_source: liveData ? '⚡ Yahoo Finance (live)' : '⚠️ Could not fetch live price',
+      results: [
+        { timeframe:'1 Week',  forecast:w,  forecast_range:wr,  actual_change:weekResult.actual,  verdict:weekResult.verdict,  note:weekResult.note  },
+        { timeframe:'1 Month', forecast:m,  forecast_range:mr,  actual_change:monthResult.actual, verdict:monthResult.verdict, note:monthResult.note },
+        { timeframe:'1 Year',  forecast:y,  forecast_range:yr,  actual_change:yearResult.actual,  verdict:'PENDING',           note:yearResult.note  },
+        { timeframe:'5 Years', forecast:fy, forecast_range:fyr, actual_change:fyResult.actual,    verdict:'PENDING',           note:fyResult.note    },
+      ],
+      accuracy_score: '2/4 evaluable',
+      summary: liveData
+        ? `Live price $${currentPrice?.toFixed(2)} vs forecast price $${forecastPrice?.toFixed(2)}. Actual move: ${actualChangePct !== null ? (actualChangePct >= 0 ? '+' : '') + actualChangePct.toFixed(2) + '%' : 'N/A'}.`
+        : 'Live price unavailable — open in browser for real accuracy data.',
+    };
+
     renderAccuracy(ticker, parsed);
   } catch(e) {
     resultDiv.innerHTML = `<div style="color:var(--red);font-size:11px;padding:8px 0">⚠️ ${e.message}</div>`;
@@ -1165,9 +1230,13 @@ function renderAccuracy(ticker, data) {
 
   resultDiv.innerHTML = `
     <div class="acc-result">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase">Accuracy Check · ${data.checked_date||''}</span>
-        <span style="font-family:var(--mono);font-size:10px;color:var(--blue)">${ticker} · ${data.current_price||''}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;">
+        <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;">Accuracy Check · ${data.checked_date||''}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--blue);">${ticker} · ${data.current_price||''}</span>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+        <span style="font-size:10px;color:var(--t3);">Forecast at: <b style="color:var(--t2);font-family:var(--mono);">${data.forecast_price||'—'}</b></span>
+        <span style="font-size:10px;">${data.data_source||''}</span>
       </div>
       ${rows}
       <div class="acc-score">${data.accuracy_score||''} · ${data.summary||''}</div>
