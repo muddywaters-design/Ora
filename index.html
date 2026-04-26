@@ -839,17 +839,16 @@ async function fetchGoogleTrends(ticker) {
     const url = `https://trends.google.com/trends/api/dailytrends?hl=en-US&tz=-360&geo=US&ns=15`;
     // Alternative: use SerpAPI free tier or pytrends-style endpoint
     // Since direct Google Trends API requires auth, we'll use a CORS proxy + trends endpoint
-    const trendsUrl = `https://trends.google.com/trends/api/explore?hl=en&tz=360&req={"comparisonItem":[{"keyword":"${ticker} stock","geo":"US","time":"today 3-m"}],"category":0,"property":""}`;
+    const trendsReq = JSON.stringify({"comparisonItem":[{"keyword": ticker + " stock","geo":"US","time":"today 3-m"}],"category":0,"property":""});
+    const trendsUrl = "https://trends.google.com/trends/api/explore?hl=en&tz=360&req=" + encodeURIComponent(trendsReq);
     const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
     for (const proxy of proxies) {
       try {
         const r = await fetch(proxy + encodeURIComponent(trendsUrl), {signal: AbortSignal.timeout(8000)});
         if (!r.ok) continue;
         const text = await r.text();
-        // Google Trends prepends ")]}'
-" to prevent XSSI
-        const cleaned = text.replace(/^\)\]\}'
-/, '');
+        // Google Trends prepends )]}' to prevent XSSI
+        const cleaned = text.replace(/^[^{]+/, '');
         const data = JSON.parse(cleaned);
         const timeline = data?.widgets?.[0]?.data?.timelineData || [];
         if (timeline.length < 4) continue;
@@ -1144,40 +1143,52 @@ function renderAnalysis(ticker, d) {
       </div>
     </div>
 
-    ${d.live_change !== undefined ? `
-    <div style="background:var(--s1);border:1px solid rgba(0,229,160,.2);border-radius:10px;padding:10px 16px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;">
-      <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-right:4px;">LIVE MARKET DATA</span>
-      <span style="font-family:var(--mono);font-size:12px;color:var(--t1);font-weight:700;">${d.current_price}</span>
-      <span style="font-family:var(--mono);font-size:11px;color:${parseFloat(d.live_change)>=0?'var(--green)':'var(--red)'};">${parseFloat(d.live_change)>=0?'+':''}${d.live_change} (${parseFloat(d.live_changePct)>=0?'+':''}${d.live_changePct}%)</span>
-      <span style="font-size:10px;color:var(--t3);">52W: <b style="color:var(--t2)">$${d.live_low52}</b> – <b style="color:var(--t2)">$${d.live_high52}</b></span>
-      <span style="font-size:10px;color:var(--t3);">Vol: <b style="color:var(--t2)">${d.live_volume}</b></span>
-      <span style="font-size:10px;color:var(--t3);">MCap: <b style="color:var(--t2)">${d.live_marketCap}</b></span>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--green);margin-left:auto;">⚡ Yahoo Finance Live</span>
-      ${d.live_rsi && d.live_rsi!=='—' ? `<div style="width:100%;display:flex;gap:14px;padding-top:8px;border-top:1px solid var(--b1);margin-top:4px;flex-wrap:wrap;">
-        <span style="font-size:10px;color:var(--t3);">RSI(14): <b style="color:${parseFloat(d.live_rsi)>70?'var(--red)':parseFloat(d.live_rsi)<30?'var(--green)':'var(--t1)'}">${d.live_rsi}</b></span>
-        <span style="font-size:10px;color:var(--t3);">MACD: <b style="color:${parseFloat(d.live_macd)>parseFloat(d.live_macd_signal)?'var(--green)':'var(--red)'}">${d.live_macd}</b></span>
-        <span style="font-size:10px;color:var(--t3);">BB: <b style="color:var(--t2)">$${d.live_bb_lower}</b>–<b style="color:var(--blue)">$${d.live_bb_mid}</b>–<b style="color:var(--t2)">$${d.live_bb_upper}</b></span>
-        <span style="font-size:10px;color:var(--t3);">Put/Call: <b style="color:${parseFloat(d.live_put_call)>1.2?'var(--red)':parseFloat(d.live_put_call)<0.7?'var(--green)':'var(--t1)'}">${d.live_put_call}</b></span>
-        ${d.live_volume_signal ? `<span style="font-size:10px;color:var(--t3);">Volume: <b style="color:${d.live_volume_signal.includes('Extreme')||d.live_volume_signal.includes('High')?'var(--yellow)':'var(--t1)'}">${d.live_volume_signal}</b> (${d.live_volume_ratio}x avg)</span>` : ''}
-        ${d.live_earnings_surprise && d.live_earnings_surprise!=='—' ? `<span style="font-size:10px;color:var(--t3);">Earnings: <b style="color:var(--green)">${d.live_earnings_surprise}</b> · ${d.live_earnings_trend}</span>` : ''}
-        ${d.live_next_earnings && d.live_next_earnings!=='—' ? `<span style="font-size:10px;color:var(--t3);">Next report: <b style="color:var(--orange)">${d.live_next_earnings}</b></span>` : ''}
-      </div>
-      <div style="width:100%;display:flex;gap:14px;padding-top:6px;flex-wrap:wrap;">
-        ${d.live_52w_pos && d.live_52w_pos!=='—' ? `<span style="font-size:10px;color:var(--t3);">52W pos: <b style="color:${parseFloat(d.live_52w_pos)>80?'var(--red)':parseFloat(d.live_52w_pos)<20?'var(--green)':'var(--t1)'}">${d.live_52w_pos}%</b> · ${d.live_52w_label}</span>` : ''}
-        ${d.live_sector_relative && d.live_sector_relative!=='—' ? `<span style="font-size:10px;color:var(--t3);">Sector: <b style="color:${parseFloat(d.live_sector_relative)>0?'var(--green)':'var(--red)'}">${d.live_sector_label}</b></span>` : ''}
-        ${d.live_analyst_revision && d.live_analyst_revision!=='—' ? `<span style="font-size:10px;color:var(--t3);">Analysts: <b style="color:${d.live_analyst_revision.includes('↑')?'var(--green)':d.live_analyst_revision.includes('↓')?'var(--red)':'var(--t1)'}">${d.live_analyst_revision}</b></span>` : ''}
-        ${d.live_beta && d.live_beta!=='—' ? `<span style="font-size:10px;color:var(--t3);">Beta: <b style="color:${parseFloat(d.live_beta)>1.5?'var(--red)':parseFloat(d.live_beta)<0.8?'var(--green)':'var(--t1)'}">${d.live_beta}</b> · Corr SPY: <b style="color:var(--t2)">${d.live_correlation}</b></span>` : ''}
-        ${d.live_dividend && d.live_dividend!=='—' ? `<span style="font-size:10px;color:var(--t3);">Dividend: <b style="color:var(--blue)">${d.live_dividend}</b></span>` : ''}
-      </div>
-      ${(d.live_insider_net || d.live_trends_signal) ? `<div style="width:100%;display:flex;gap:14px;padding-top:6px;flex-wrap:wrap;">
-        ${d.live_insider_net ? `<span style="font-size:10px;color:var(--t3);">Insider: <b style="color:${d.live_insider_net.includes('Buying')?'var(--green)':d.live_insider_net.includes('Selling')?'var(--red)':'var(--t1)'}">${d.live_insider_net}</b> (${d.live_insider_buys}B/${d.live_insider_sells}S · 90d)</span>` : ''}
-        ${d.live_trends_signal ? `<span style="font-size:10px;color:var(--t3);">Google Trends: <b style="color:${d.live_trends_signal.includes('Surging')||d.live_trends_signal.includes('Rising')?'var(--green)':d.live_trends_signal.includes('Declining')?'var(--red)':'var(--t1)'}">${d.live_trends_signal}</b> (${d.live_trends_change}%)</span>` : ''}
-      </div>` : ''}` : `
-    </div>` : `
-    <div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;gap:8px;">
-      <span>⚠️</span>
-      <span>Live price unavailable in this interface. <b>Open the downloaded HTML file in your browser</b> for real-time Yahoo Finance data.</span>
-    </div>`}
+    ${(()=>{
+      if (d.live_change === undefined) {
+        return `<div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;gap:8px;"><span>⚠️</span><span>Live price unavailable in this interface. <b>Open the downloaded HTML file in your browser</b> for real-time Yahoo Finance data.</span></div>`;
+      }
+      let html = `<div style="background:var(--s1);border:1px solid rgba(0,229,160,.2);border-radius:10px;padding:10px 16px;">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;">LIVE MARKET DATA &nbsp;⚡ Yahoo Finance Live</div>
+        <div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:6px;">
+          <span style="font-family:var(--mono);font-size:13px;color:var(--t1);font-weight:700;">${d.current_price}</span>
+          <span style="font-family:var(--mono);font-size:12px;color:${parseFloat(d.live_change)>=0?'var(--green)':'var(--red)'};">${parseFloat(d.live_change)>=0?'+':''}${d.live_change} (${parseFloat(d.live_changePct)>=0?'+':''}${d.live_changePct}%)</span>
+          <span style="font-size:11px;color:var(--t3);">52W: <b style="color:var(--t2)">$${d.live_low52}</b>–<b style="color:var(--t2)">$${d.live_high52}</b></span>
+          <span style="font-size:11px;color:var(--t3);">Vol: <b style="color:var(--t2)">${d.live_volume}</b></span>
+          <span style="font-size:11px;color:var(--t3);">MCap: <b style="color:var(--t2)">${d.live_marketCap}</b></span>
+        </div>`;
+      if (d.live_rsi && d.live_rsi !== '—') {
+        html += `<div style="display:flex;flex-wrap:wrap;gap:14px;padding-top:7px;border-top:1px solid var(--b1);margin-top:4px;">
+          <span style="font-size:10px;color:var(--t3);">RSI(14): <b style="color:${parseFloat(d.live_rsi)>70?'var(--red)':parseFloat(d.live_rsi)<30?'var(--green)':'var(--t1)'}">${d.live_rsi}</b></span>
+          <span style="font-size:10px;color:var(--t3);">MACD: <b style="color:${parseFloat(d.live_macd)>parseFloat(d.live_macd_signal)?'var(--green)':'var(--red)'}">${d.live_macd}</b></span>
+          <span style="font-size:10px;color:var(--t3);">BB: <b style="color:var(--t2)">$${d.live_bb_lower}</b>–<b style="color:var(--blue)">$${d.live_bb_mid}</b>–<b style="color:var(--t2)">$${d.live_bb_upper}</b></span>
+          <span style="font-size:10px;color:var(--t3);">Put/Call: <b style="color:${parseFloat(d.live_put_call)>1.2?'var(--red)':parseFloat(d.live_put_call)<0.7?'var(--green)':'var(--t1)'}">${d.live_put_call}</b></span>
+        </div>`;
+      }
+      if (d.live_volume_signal && d.live_volume_signal !== '—') {
+        html += `<div style="display:flex;flex-wrap:wrap;gap:14px;padding-top:6px;margin-top:2px;">
+          <span style="font-size:10px;color:var(--t3);">Volume: <b style="color:${d.live_volume_signal.includes('Extreme')||d.live_volume_signal.includes('High')?'var(--yellow)':'var(--t1)'}">${d.live_volume_signal}</b> (${d.live_volume_ratio}x avg)</span>
+          ${d.live_earnings_surprise && d.live_earnings_surprise!=='—' ? `<span style="font-size:10px;color:var(--t3);">Earnings: <b style="color:var(--green)">${d.live_earnings_surprise}</b> · ${d.live_earnings_trend}</span>` : ''}
+          ${d.live_next_earnings && d.live_next_earnings!=='—' ? `<span style="font-size:10px;color:var(--t3);">Next: <b style="color:var(--orange)">${d.live_next_earnings}</b></span>` : ''}
+        </div>`;
+      }
+      if (d.live_52w_pos && d.live_52w_pos !== '—') {
+        html += `<div style="display:flex;flex-wrap:wrap;gap:14px;padding-top:6px;margin-top:2px;">
+          <span style="font-size:10px;color:var(--t3);">52W pos: <b style="color:${parseFloat(d.live_52w_pos)>80?'var(--red)':parseFloat(d.live_52w_pos)<20?'var(--green)':'var(--t1)'}">${d.live_52w_pos}%</b> · ${d.live_52w_label}</span>
+          ${d.live_sector_relative && d.live_sector_relative!=='—' ? `<span style="font-size:10px;color:var(--t3);">Sector: <b style="color:${parseFloat(d.live_sector_relative)>0?'var(--green)':'var(--red)'}">${d.live_sector_label}</b></span>` : ''}
+          ${d.live_analyst_revision && d.live_analyst_revision!=='—' ? `<span style="font-size:10px;color:var(--t3);">Analysts: <b style="color:${d.live_analyst_revision.includes('↑')?'var(--green)':d.live_analyst_revision.includes('↓')?'var(--red)':'var(--t1)'}">${d.live_analyst_revision}</b></span>` : ''}
+          ${d.live_beta && d.live_beta!=='—' ? `<span style="font-size:10px;color:var(--t3);">Beta: <b style="color:var(--t2)">${d.live_beta}</b> · Corr SPY: <b style="color:var(--t2)">${d.live_correlation}</b></span>` : ''}
+          ${d.live_dividend && d.live_dividend!=='—' ? `<span style="font-size:10px;color:var(--t3);">Div: <b style="color:var(--blue)">${d.live_dividend}</b></span>` : ''}
+        </div>`;
+      }
+      if (d.live_insider_net || d.live_trends_signal) {
+        html += `<div style="display:flex;flex-wrap:wrap;gap:14px;padding-top:6px;margin-top:2px;">
+          ${d.live_insider_net ? `<span style="font-size:10px;color:var(--t3);">Insider: <b style="color:${d.live_insider_net.includes('Buying')?'var(--green)':d.live_insider_net.includes('Selling')?'var(--red)':'var(--t1)'}">${d.live_insider_net}</b> (${d.live_insider_buys}B/${d.live_insider_sells}S · 90d)</span>` : ''}
+          ${d.live_trends_signal ? `<span style="font-size:10px;color:var(--t3);">Google Trends: <b style="color:${d.live_trends_signal.includes('Surging')||d.live_trends_signal.includes('Rising')?'var(--green)':d.live_trends_signal.includes('Declining')?'var(--red)':'var(--t1)'}">${d.live_trends_signal}</b> (${d.live_trends_change}%)</span>` : ''}
+        </div>`;
+      }
+      html += '</div>';
+      return html;
+    })()}
 
 
 
@@ -1687,6 +1698,36 @@ function calibrateConfidence(parsed, liveData) {
   }
 }
 
+// ── Fear & Greed (used by Consensus engine) ───────────────────
+async function fetchFearGreed() {
+  const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url=','https://thingproxy.freeboard.io/fetch/'];
+  const url = 'https://production.dataviz.cnn.io/index/fearandgreed/graphdata';
+  for (const proxy of proxies) {
+    try {
+      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(6000)});
+      if (!r.ok) continue;
+      const data = await r.json();
+      const fg = data?.fear_and_greed;
+      if (!fg?.score) continue;
+      return {
+        score: Math.round(fg.score),
+        rating: fg.rating,
+        prev:   Math.round(fg.previous_close || fg.score),
+        week:   Math.round(fg.previous_1_week || fg.score),
+        source: 'live',
+      };
+    } catch(_) {}
+  }
+  // Fallback — ask Claude
+  try {
+    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const raw = await toJSON(`${d}. Estimate the current CNN Fear & Greed Index. Consider recent S&P 500 trend, VIX, and market sentiment. Reply ONLY JSON with real estimates: {"score":REAL_NUMBER,"rating":"Fear or Neutral or Greed","prev":ESTIMATE,"week":ESTIMATE}`);
+    const p = extractJSON(raw);
+    if (p?.score && typeof p.score === 'number') return { ...p, source:'estimated' };
+  } catch(_) {}
+  return null;
+}
+
 // ── Sentiment Consensus ───────────────────────────────────────
 async function showSentimentConsensus() {
   const content = document.getElementById('analyzeContent');
@@ -1873,7 +1914,7 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
 
       <!-- Ranked tickers -->
       <div style="padding:12px;display:flex;flex-direction:column;gap:8px;">
-        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Consensus Score (WSB 40pts + Trends 35pts + F&G 25pts)</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Consensus Score (WSB 40pts + Trends 35pts + F+G 25pts)</div>
         ${rankCards}
       </div>
     </div>`;
