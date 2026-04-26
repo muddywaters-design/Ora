@@ -268,6 +268,11 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
       onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
       ⚡ Opportunity Scanner — Find Stocks About to Move
     </button>
+    <button onclick="showSentimentConsensus()"
+      style="background:linear-gradient(135deg,var(--purple),var(--orange));color:var(--bg);border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;"
+      onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+      🎯 Sentiment Consensus — WSB + Trends + Fear &amp; Greed
+    </button>
   </div>
   </div>
   <div class="content" id="analyzeContent">
@@ -1680,6 +1685,199 @@ function calibrateConfidence(parsed, liveData) {
     f.confidence = Math.round(Math.min(92, Math.max(15, base + agreementBonus)));
     f.calibrated = true;
   }
+}
+
+// ── Sentiment Consensus ───────────────────────────────────────
+async function showSentimentConsensus() {
+  const content = document.getElementById('analyzeContent');
+  const ex = content.querySelector('[data-consensus]');
+  if (ex) { ex.remove(); return; }
+
+  // Show loading panel
+  const wrapper = document.createElement('div');
+  wrapper.setAttribute('data-consensus','1');
+  wrapper.style.cssText = 'padding:14px 14px 0;';
+  wrapper.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:24px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:14px;">
+      <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">🎯 Sentiment Consensus Engine</div>
+      <div style="width:200px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;">
+        <div style="height:100%;background:linear-gradient(90deg,var(--purple),var(--orange));border-radius:1px;animation:la 1.5s ease-in-out infinite;"></div>
+      </div>
+      <div id="consensusStatus" style="font-size:11px;color:var(--t3);font-family:var(--mono);">Gathering signals from all sources…</div>
+    </div>`;
+  content.insertBefore(wrapper, content.firstChild);
+
+  const setStatus = (msg) => {
+    const el = document.getElementById('consensusStatus');
+    if (el) el.textContent = msg;
+  };
+
+  try {
+    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+
+    // ── Step 1: Get WSB top tickers ──
+    setStatus('📡 Step 1/3 — Scanning r/WallStreetBets…');
+    const wsbPromptStr = `${d}. List the 5 most discussed stocks on r/WallStreetBets right now. Start with { end with }. Output ONLY JSON:
+{"tickers":[{"rank":1,"ticker":"NVDA","company":"Nvidia","mentions":"~800","sentiment":"Bullish","sentiment_pct":85,"top_thesis":"One sentence.","heat":"🔥🔥🔥"},{"rank":2,"ticker":"TSLA","company":"Tesla","mentions":"~500","sentiment":"Mixed","sentiment_pct":52,"top_thesis":"One sentence.","heat":"🔥🔥"},{"rank":3,"ticker":"GME","company":"GameStop","mentions":"~300","sentiment":"Bullish","sentiment_pct":70,"top_thesis":"One sentence.","heat":"🔥🔥"},{"rank":4,"ticker":"PLTR","company":"Palantir","mentions":"~250","sentiment":"Bullish","sentiment_pct":75,"top_thesis":"One sentence.","heat":"🔥"},{"rank":5,"ticker":"AMD","company":"AMD","mentions":"~200","sentiment":"Bullish","sentiment_pct":68,"top_thesis":"One sentence.","heat":"🔥"}]}`;
+    const wsbRaw = await toJSON(wsbPromptStr);
+    const wsbData = extractJSON(wsbRaw);
+    const wsbTickers = (wsbData.tickers||[]).map(t => ({
+      ticker: t.ticker,
+      company: t.company,
+      sentiment_pct: t.sentiment_pct,
+      mentions: t.mentions,
+      thesis: t.top_thesis,
+      heat: t.heat,
+    }));
+
+    // ── Step 2: Google Trends for each WSB ticker ──
+    setStatus('📈 Step 2/3 — Checking Google Trends for each ticker…');
+    const trendsResults = {};
+    for (const t of wsbTickers) {
+      const tr = await fetchGoogleTrends(t.ticker);
+      trendsResults[t.ticker] = tr;
+      await new Promise(r => setTimeout(r, 300)); // small delay to avoid rate limit
+    }
+
+    // ── Step 3: Fear & Greed context ──
+    setStatus('😨 Step 3/3 — Fetching Fear & Greed Index…');
+    const fgData = await fetchFearGreed();
+
+    // ── Step 4: Score each ticker across all sources ──
+    setStatus('🧮 Computing consensus scores…');
+
+    const scored = wsbTickers.map(t => {
+      let score = 0;
+      const signals = [];
+
+      // WSB signal (0-40 points)
+      const wsbScore = Math.round((t.sentiment_pct / 100) * 40);
+      score += wsbScore;
+      signals.push({ source:'WSB', value:`${t.sentiment_pct}%`, points:wsbScore, bull: t.sentiment_pct >= 60 });
+
+      // Google Trends signal (0-35 points)
+      const tr = trendsResults[t.ticker];
+      if (tr) {
+        const trendPct = parseFloat(tr.trend_change) || 0;
+        const trendScore = Math.min(35, Math.max(0, Math.round(17.5 + trendPct * 0.35)));
+        score += trendScore;
+        signals.push({ source:'Google Trends', value:tr.signal, points:trendScore, bull: trendPct > 10 });
+      } else {
+        signals.push({ source:'Google Trends', value:'No data', points:0, bull: false });
+      }
+
+      // Fear & Greed signal (0-25 points)
+      // In fear (low score) → contrarian buy; in greed (high score) → cautious
+      if (fgData) {
+        const fg = fgData.score;
+        // Best buying signal: Fear (20-40) — contrarian opportunity
+        // Worst: Extreme Greed (75+) — market may reverse
+        const fgScore = fg <= 25 ? 25 :  // Extreme Fear = max buy signal
+                        fg <= 45 ? 20 :  // Fear = good
+                        fg <= 55 ? 15 :  // Neutral
+                        fg <= 75 ? 10 :  // Greed = caution
+                                   5;    // Extreme Greed = high risk
+        score += fgScore;
+        signals.push({ source:'Fear & Greed', value:`${fgData.rating} (${fg})`, points:fgScore, bull: fg <= 45 });
+      } else {
+        signals.push({ source:'Fear & Greed', value:'No data', points:0, bull: false });
+      }
+
+      const consensus = signals.filter(s=>s.bull).length;
+      return { ...t, score, signals, consensus, maxScore: 100 };
+    });
+
+    // Sort by consensus score
+    scored.sort((a,b) => b.score - a.score);
+    const top = scored[0];
+    const allAgree = top.consensus >= 2; // at least 2/3 sources bullish
+
+    renderSentimentConsensus(scored, fgData, d, wrapper);
+
+  } catch(e) {
+    wrapper.innerHTML = `<div style="padding:16px;background:var(--s1);border:1px solid var(--b1);border-radius:12px;">
+      <div style="color:var(--red);font-size:12px;">⚠️ ${e.message}</div>
+    </div>`;
+  }
+}
+
+function renderSentimentConsensus(scored, fgData, d, wrapper) {
+  const top = scored[0];
+
+  const fgBar = fgData ? (() => {
+    const col = fgData.score >= 75?'var(--red)':fgData.score>=55?'var(--orange)':fgData.score>=45?'var(--yellow)':fgData.score>=25?'var(--blue)':'var(--purple)';
+    const label = fgData.score>=75?'Extreme Greed':fgData.score>=55?'Greed':fgData.score>=45?'Neutral':fgData.score>=25?'Fear':'Extreme Fear';
+    return `<div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-family:var(--mono);font-size:11px;color:${col};font-weight:700;">${fgData.score}/100</span>
+      <span style="font-size:11px;color:var(--t2);">${label}</span>
+      <div style="flex:1;height:4px;background:linear-gradient(90deg,var(--purple),var(--blue),var(--yellow),var(--orange),var(--red));border-radius:2px;position:relative;">
+        <div style="position:absolute;top:-4px;left:calc(${fgData.score}% - 5px);width:10px;height:10px;border-radius:50%;background:var(--t1);border:2px solid ${col};"></div>
+      </div>
+    </div>`;
+  })() : '<span style="color:var(--t3);font-size:11px;">Unavailable</span>';
+
+  const scoreBar = (score, max=100) => {
+    const pct = Math.round(score/max*100);
+    const col = pct>=70?'var(--green)':pct>=50?'var(--yellow)':'var(--red)';
+    return `<div style="display:flex;align-items:center;gap:8px;">
+      <div style="flex:1;height:6px;background:var(--b2);border-radius:3px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${col};border-radius:3px;"></div>
+      </div>
+      <span style="font-family:var(--mono);font-size:10px;color:${col};flex-shrink:0;min-width:28px;">${score}</span>
+    </div>`;
+  };
+
+  const signalDots = (signals) => signals.map(s =>
+    `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:20px;font-size:9px;font-family:var(--mono);background:${s.bull?'rgba(0,229,160,.1)':'rgba(255,68,102,.1)'};border:1px solid ${s.bull?'rgba(0,229,160,.25)':'rgba(255,68,102,.25)'};color:${s.bull?'var(--green)':'var(--red)'};">
+      ${s.bull?'↑':'↓'} ${s.source}
+    </span>`
+  ).join('');
+
+  const rankCards = scored.map((s, i) => {
+    const isTop = i === 0;
+    const col = isTop ? (s.consensus >= 2 ? 'var(--green)' : 'var(--yellow)') : 'var(--t3)';
+    return `
+    <div style="background:${isTop?'var(--s3)':'var(--s2)'};border:1px solid ${isTop?'rgba(0,229,160,.3)':'var(--b1)'};border-radius:10px;padding:12px;${isTop?'border-left:3px solid var(--green);':''}">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <span style="font-family:var(--mono);font-size:${isTop?'18':'14'}px;font-weight:700;color:${col};">${isTop?'🏆':i+1+'.'} ${s.ticker}</span>
+        <span style="font-size:11px;color:var(--t2);flex:1;">${s.company}</span>
+        <span style="font-size:12px;">${s.heat||''}</span>
+        ${isTop && s.consensus >= 2 ? `<span style="padding:3px 8px;border-radius:20px;font-family:var(--mono);font-size:9px;background:rgba(0,229,160,.15);color:var(--green);border:1px solid rgba(0,229,160,.3);">ALL AGREE</span>` : ''}
+      </div>
+      ${scoreBar(s.score)}
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;">${signalDots(s.signals)}</div>
+      ${isTop ? `<div style="font-size:11px;color:var(--t2);margin-top:8px;line-height:1.5;">${s.thesis}</div>
+      <button onclick="document.getElementById('tickerInput').value='${s.ticker}';runAnalysis('${s.ticker}')"
+        style="margin-top:10px;background:var(--green);color:var(--bg);border:none;padding:8px 16px;border-radius:7px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;width:100%;">
+        ⚡ Run Full Analysis on ${s.ticker}
+      </button>` : ''}
+    </div>`;
+  }).join('');
+
+  wrapper.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;" data-consensus="1">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">🎯 Sentiment Consensus · ${d}</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">WSB + Google Trends + Fear & Greed → Best opportunity</div>
+        </div>
+        <button onclick="this.closest('[data-consensus]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+      </div>
+
+      <!-- Fear & Greed context -->
+      <div style="padding:10px 16px;border-bottom:1px solid var(--b1);background:var(--s2);">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">Market Backdrop — Fear & Greed</div>
+        ${fgBar}
+        ${fgData ? `<div style="font-size:10px;color:var(--t3);margin-top:4px;">${fgData.score<=45?'⚡ Fear environment — contrarian buying opportunity':'⚠️ Greed present — higher risk environment'}</div>` : ''}
+      </div>
+
+      <!-- Ranked tickers -->
+      <div style="padding:12px;display:flex;flex-direction:column;gap:8px;">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Consensus Score (WSB 40pts + Trends 35pts + F&G 25pts)</div>
+        ${rankCards}
+      </div>
+    </div>`;
+  wrapper.setAttribute('data-consensus','1');
 }
 
 function sc2cls(s) {
