@@ -478,7 +478,7 @@ function extractJSON(raw) {
 }
 
 // ── Prompts ────────────────────────────────────────────────────
-function mkSinglePrompt(ticker, liveData, fgData) {
+function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData) {
   const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const price = liveData?.price ? `Current price: $${liveData.price} (${liveData.change>=0?'+':''}${liveData.change}, ${liveData.changePct}%). 52W: $${liveData.low52}-$${liveData.high52}. Vol: ${liveData.volume}. MCap: ${liveData.marketCap}. PE: ${liveData.pe}. Target: ${liveData.targetPrice}.` : '';
   const techs = liveData?.rsi && liveData.rsi!=='—' ? `RSI(14):${liveData.rsi} MACD:${liveData.macd} Signal:${liveData.macdSignal} BB:${liveData.bb_lower}-${liveData.bb_mid}-${liveData.bb_upper} Put/Call:${liveData.putCallRatio}.` : '';
@@ -971,7 +971,7 @@ async function runAnalysis(sym) {
       const loading = document.querySelector('.loading');
       if (loading) loading.appendChild(warn);
     }
-    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData));
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData));
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
     // Always inject live price if we got it
@@ -1758,14 +1758,7 @@ async function showSentimentConsensus() {
 
     // ── Step 1: Get WSB top tickers ──
     setStatus('📡 Step 1/3 — Scanning r/WallStreetBets…');
-    const wsbPromptStr = `${d}. Name the 5 most discussed stocks on r/WallStreetBets this week. Reply ONLY with this JSON structure, filling in real values:
-{"tickers":[
-{"rank":1,"ticker":"X","company":"X","mentions":"~X","sentiment":"Bullish","sentiment_pct":80,"top_thesis":"X.","heat":"🔥🔥🔥"},
-{"rank":2,"ticker":"X","company":"X","mentions":"~X","sentiment":"Mixed","sentiment_pct":55,"top_thesis":"X.","heat":"🔥🔥"},
-{"rank":3,"ticker":"X","company":"X","mentions":"~X","sentiment":"Bullish","sentiment_pct":70,"top_thesis":"X.","heat":"🔥🔥"},
-{"rank":4,"ticker":"X","company":"X","mentions":"~X","sentiment":"Bullish","sentiment_pct":65,"top_thesis":"X.","heat":"🔥"},
-{"rank":5,"ticker":"X","company":"X","mentions":"~X","sentiment":"Bullish","sentiment_pct":60,"top_thesis":"X.","heat":"🔥"}
-]}`;
+    const wsbPromptStr = `${d}. Output ONLY a raw JSON object (no markdown, no explanation, start char is {, end char is }). List 5 most discussed WSB stocks: {"tickers":[{"rank":1,"ticker":"NVDA","company":"Nvidia","mentions":"~800","sentiment":"Bullish","sentiment_pct":85,"top_thesis":"AI dominance.","heat":"3"},{"rank":2,"ticker":"TSLA","company":"Tesla","mentions":"~500","sentiment":"Mixed","sentiment_pct":52,"top_thesis":"Delivery concerns.","heat":"2"},{"rank":3,"ticker":"GME","company":"GameStop","mentions":"~300","sentiment":"Bullish","sentiment_pct":70,"top_thesis":"Meme revival.","heat":"2"},{"rank":4,"ticker":"PLTR","company":"Palantir","mentions":"~250","sentiment":"Bullish","sentiment_pct":75,"top_thesis":"AI contracts.","heat":"1"},{"rank":5,"ticker":"AMD","company":"AMD","mentions":"~200","sentiment":"Bullish","sentiment_pct":68,"top_thesis":"GPU competition.","heat":"1"}]} — replace ticker/company/thesis with REAL current WSB tickers and real reasons.`;
     const wsbRaw = await toJSON(wsbPromptStr);
     const wsbData = extractJSON(wsbRaw);
     const wsbTickers = (wsbData.tickers||[]).map(t => ({
