@@ -407,6 +407,60 @@ async function toJSON(prompt) {
   return d.content.filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
+// ── Ensemble Forecasting ──────────────────────────────────────
+// Runs 3 parallel Claude calls and averages confidence + direction
+async function toJSONEnsemble(prompt) {
+  // Run 3 calls in parallel for ensemble
+  const results = await Promise.allSettled([
+    toJSON(prompt),
+    toJSON(prompt),
+    toJSON(prompt),
+  ]);
+
+  const parsed = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      try { parsed.push(extractJSON(r.value)); } catch(_) {}
+    }
+  }
+
+  if (parsed.length === 0) throw new Error('All ensemble calls failed');
+  if (parsed.length === 1) return JSON.stringify(parsed[0]);
+
+  // Use first result as base, average confidence scores and directions
+  const base = JSON.parse(JSON.stringify(parsed[0]));
+
+  const timeframes = ['week','month','year','five_year'];
+  for (const tf of timeframes) {
+    const forecasts = parsed.map(p => p.forecasts?.[tf]).filter(Boolean);
+    if (forecasts.length < 2) continue;
+
+    // Average confidence
+    const avgConf = Math.round(forecasts.reduce((a,f) => a + (f.confidence||50), 0) / forecasts.length);
+
+    // Count signal votes
+    const signals = forecasts.map(f => f.signal || 'NEUTRAL');
+    const votes = { BULLISH:0, BEARISH:0, NEUTRAL:0 };
+    signals.forEach(s => { if (votes[s] !== undefined) votes[s]++; });
+    const winSignal = Object.entries(votes).sort((a,b)=>b[1]-a[1])[0][0];
+
+    // Average direction percentage
+    const dirPcts = forecasts.map(f => parseFloat((f.direction||'0').replace(/[^-0-9.]/g,''))).filter(n => !isNaN(n));
+    const avgDir = dirPcts.length > 0 ? (dirPcts.reduce((a,b)=>a+b,0)/dirPcts.length) : 0;
+
+    // Apply ensemble results — boost confidence if all agree
+    const allAgree = signals.every(s => s === signals[0]);
+    base.forecasts[tf].confidence = allAgree ? Math.min(95, avgConf + 5) : Math.max(20, avgConf - 5);
+    base.forecasts[tf].signal = winSignal;
+    base.forecasts[tf].direction = (avgDir >= 0 ? '+' : '') + avgDir.toFixed(1) + '%';
+    base.forecasts[tf].ensemble_agreement = `${signals.filter(s=>s===winSignal).length}/${forecasts.length} models agree`;
+  }
+
+  base._ensemble = true;
+  base._ensemble_models = parsed.length;
+  return JSON.stringify(base);
+}
+
 function extractJSON(raw) {
   const text = raw.replace(/```(?:json)?/gi, '').trim();
   let depth = 0, start = -1, end = -1;
@@ -430,8 +484,10 @@ function mkSinglePrompt(ticker, liveData, fgData) {
   const revCtx  = liveData?.analystRevision && liveData.analystRevision!=='—' ? `AnalystTrend:${liveData.analystRevision}(${liveData.analystRevisionLabel}).` : '';
   const betaCtx = liveData?.beta && liveData.beta!=='—' ? `Beta:${liveData.beta}(${liveData.betaLabel}),CorrSPY:${liveData.correlation}.` : '';
   const divCtx  = liveData?.dividendYield && liveData.dividendYield!=='—' ? `Div:${liveData.dividendYield}(${liveData.dividendLabel}).` : '';
+  const insiderCtx = insiderData ? `InsiderActivity:${insiderData.net}(${insiderData.buys}buys,${insiderData.sells}sells in 90d).` : '';
+  const trendsCtx  = trendsData  ? `GoogleTrends:${trendsData.signal},${trendsData.trend_change}%change.` : '';
   const fg = fgData ? `Fear&Greed: ${fgData.score}/100 (${fgData.rating}).` : '';
-  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx}
+  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"X"},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
@@ -730,6 +786,92 @@ async function fetchLivePrice(ticker) {
   return null; // all failed — Claude will use its own knowledge
 }
 
+// ── SEC EDGAR Insider Trading ─────────────────────────────────
+async function fetchInsiderTrading(ticker) {
+  try {
+    // EDGAR full-text search for Form 4 filings (insider transactions)
+    const url = `https://efts.sec.gov/LATEST/search-index?q=%22${ticker}%22&dateRange=custom&startdt=${getDateNDaysAgo(90)}&enddt=${getDateNDaysAgo(0)}&forms=4`;
+    const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
+    for (const proxy of proxies) {
+      try {
+        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(8000)});
+        if (!r.ok) continue;
+        const data = await r.json();
+        const hits = data?.hits?.hits || [];
+        if (hits.length === 0) return { signal:'No recent filings', buys:0, sells:0, net:'Neutral', details:'No Form 4 filings in last 90 days' };
+
+        // Parse filing summaries
+        let buys = 0, sells = 0;
+        const recent = [];
+        for (const h of hits.slice(0,10)) {
+          const src = h._source || {};
+          const name = src.display_names?.[0]?.name || 'Insider';
+          const date = src.file_date || '';
+          // Try to determine buy vs sell from description
+          const desc = (src.description || '').toLowerCase();
+          if (desc.includes('purchase') || desc.includes('acquisition')) { buys++; recent.push(`${name} BOUGHT (${date})`); }
+          else if (desc.includes('sale') || desc.includes('disposition')) { sells++; recent.push(`${name} SOLD (${date})`); }
+        }
+        const net = buys > sells ? 'Net Buying 🟢' : sells > buys ? 'Net Selling 🔴' : 'Mixed';
+        return {
+          signal: buys > 0 || sells > 0 ? net : 'No clear activity',
+          buys, sells,
+          net,
+          details: recent.slice(0,3).join(' | ') || 'See SEC EDGAR for details',
+          source: 'SEC EDGAR Form 4'
+        };
+      } catch(_) { continue; }
+    }
+  } catch(e) { console.warn('EDGAR failed:', e.message); }
+  return null;
+}
+
+// ── Google Trends ──────────────────────────────────────────────
+async function fetchGoogleTrends(ticker) {
+  try {
+    // Use unofficial Google Trends API via proxy
+    const companyName = ticker; // will use ticker as search term
+    const url = `https://trends.google.com/trends/api/dailytrends?hl=en-US&tz=-360&geo=US&ns=15`;
+    // Alternative: use SerpAPI free tier or pytrends-style endpoint
+    // Since direct Google Trends API requires auth, we'll use a CORS proxy + trends endpoint
+    const trendsUrl = `https://trends.google.com/trends/api/explore?hl=en&tz=360&req={"comparisonItem":[{"keyword":"${ticker} stock","geo":"US","time":"today 3-m"}],"category":0,"property":""}`;
+    const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
+    for (const proxy of proxies) {
+      try {
+        const r = await fetch(proxy + encodeURIComponent(trendsUrl), {signal: AbortSignal.timeout(8000)});
+        if (!r.ok) continue;
+        const text = await r.text();
+        // Google Trends prepends ")]}'
+" to prevent XSSI
+        const cleaned = text.replace(/^\)\]\}'
+/, '');
+        const data = JSON.parse(cleaned);
+        const timeline = data?.widgets?.[0]?.data?.timelineData || [];
+        if (timeline.length < 4) continue;
+        const recent = timeline.slice(-4).map(d => d.value?.[0] || 0);
+        const older  = timeline.slice(-12,-4).map(d => d.value?.[0] || 0);
+        const recentAvg = recent.reduce((a,b)=>a+b,0)/recent.length;
+        const olderAvg  = older.reduce((a,b)=>a+b,0)/Math.max(1,older.length);
+        const change = olderAvg > 0 ? ((recentAvg - olderAvg)/olderAvg*100) : 0;
+        const current = recent[recent.length-1];
+        return {
+          current_interest: current,
+          trend_change: change.toFixed(1),
+          signal: change > 50 ? 'Surging interest 🔥' : change > 20 ? 'Rising interest 📈' : change > -20 ? 'Stable' : 'Declining interest 📉',
+          source: 'Google Trends'
+        };
+      } catch(_) { continue; }
+    }
+  } catch(e) { console.warn('Google Trends failed:', e.message); }
+  return null;
+}
+
+function getDateNDaysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+}
+
 // ── Technical Indicators ──────────────────────────────────────
 function calcRSI(closes, period=14) {
   let gains=0, losses=0;
@@ -809,8 +951,12 @@ async function runAnalysis(sym) {
   }, 1600);
 
   try {
-    // Fetch live market data only (F&G is separate via its own button)
-    const liveData = await fetchLivePrice(t);
+    // Fetch all data sources in parallel
+    const [liveData, insiderData, trendsData] = await Promise.allSettled([
+      fetchLivePrice(t),
+      fetchInsiderTrading(t),
+      fetchGoogleTrends(t),
+    ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : null));
     const fgData = null;
     if (!liveData) {
       // Show warning in loading area
@@ -821,7 +967,7 @@ async function runAnalysis(sym) {
       const loading = document.querySelector('.loading');
       if (loading) loading.appendChild(warn);
     }
-    const raw = await toJSON(mkSinglePrompt(t, liveData, fgData));
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData));
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
     // Always inject live price if we got it
@@ -882,6 +1028,22 @@ async function runAnalysis(sym) {
       parsed.live_dividend       = liveData.dividendYield;
       parsed.live_dividend_label = liveData.dividendLabel;
     }
+    // Inject insider data
+    if (insiderData) {
+      parsed.live_insider_signal  = insiderData.signal;
+      parsed.live_insider_net     = insiderData.net;
+      parsed.live_insider_buys    = insiderData.buys;
+      parsed.live_insider_sells   = insiderData.sells;
+      parsed.live_insider_details = insiderData.details;
+    }
+    // Inject Google Trends data
+    if (trendsData) {
+      parsed.live_trends_signal  = trendsData.signal;
+      parsed.live_trends_change  = trendsData.trend_change;
+      parsed.live_trends_current = trendsData.current_interest;
+    }
+    // Auto-calibrate confidence based on data signal agreement
+    calibrateConfidence(parsed, liveData);
     currentResult = parsed;
     clearInterval(iv);
     renderAnalysis(t, parsed);
@@ -937,6 +1099,7 @@ function renderAnalysis(ticker, d) {
       <div class="fc-rng">${f.range||'—'}</div>
       <div class="cbar"><div class="cfill" style="width:${f.confidence||0}%"></div></div>
       <div class="fc-cf"><span class="${fc}">${f.signal||'NEUTRAL'}</span><span style="color:var(--t3)">${f.confidence||0}% conf</span></div>
+      ${f.ensemble_agreement ? `<div style="font-family:var(--mono);font-size:8px;color:var(--blue);margin-top:4px;">🔀 ${f.ensemble_agreement}</div>` : ''}
       ${f.reasoning?`<div class="fc-rs">${f.reasoning}</div>`:''}
     </div>`;
   }).join('');
@@ -971,6 +1134,7 @@ function renderAnalysis(ticker, d) {
       <div class="sh-row">
         <span class="badge ${sc==='bull'?'bg':sc==='bear'?'br':'by'}">${d.overall_signal||'NEUTRAL'}</span>
         <span class="badge bb">${d.current_price||'N/A'}</span>
+          ${d._ensemble ? `<span style="padding:4px 11px;border-radius:20px;font-family:var(--mono);font-size:10px;background:rgba(77,168,255,.1);color:var(--blue);border:1px solid rgba(77,168,255,.25);">🔀 ${d._ensemble_models}-Model Ensemble</span>` : ''}
         <span class="sh-date">${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
       </div>
     </div>
@@ -999,7 +1163,11 @@ function renderAnalysis(ticker, d) {
         ${d.live_analyst_revision && d.live_analyst_revision!=='—' ? `<span style="font-size:10px;color:var(--t3);">Analysts: <b style="color:${d.live_analyst_revision.includes('↑')?'var(--green)':d.live_analyst_revision.includes('↓')?'var(--red)':'var(--t1)'}">${d.live_analyst_revision}</b></span>` : ''}
         ${d.live_beta && d.live_beta!=='—' ? `<span style="font-size:10px;color:var(--t3);">Beta: <b style="color:${parseFloat(d.live_beta)>1.5?'var(--red)':parseFloat(d.live_beta)<0.8?'var(--green)':'var(--t1)'}">${d.live_beta}</b> · Corr SPY: <b style="color:var(--t2)">${d.live_correlation}</b></span>` : ''}
         ${d.live_dividend && d.live_dividend!=='—' ? `<span style="font-size:10px;color:var(--t3);">Dividend: <b style="color:var(--blue)">${d.live_dividend}</b></span>` : ''}
-      </div>` : ''}
+      </div>
+      ${(d.live_insider_net || d.live_trends_signal) ? `<div style="width:100%;display:flex;gap:14px;padding-top:6px;flex-wrap:wrap;">
+        ${d.live_insider_net ? `<span style="font-size:10px;color:var(--t3);">Insider: <b style="color:${d.live_insider_net.includes('Buying')?'var(--green)':d.live_insider_net.includes('Selling')?'var(--red)':'var(--t1)'}">${d.live_insider_net}</b> (${d.live_insider_buys}B/${d.live_insider_sells}S · 90d)</span>` : ''}
+        ${d.live_trends_signal ? `<span style="font-size:10px;color:var(--t3);">Google Trends: <b style="color:${d.live_trends_signal.includes('Surging')||d.live_trends_signal.includes('Rising')?'var(--green)':d.live_trends_signal.includes('Declining')?'var(--red)':'var(--t1)'}">${d.live_trends_signal}</b> (${d.live_trends_change}%)</span>` : ''}
+      </div>` : ''}` : `
     </div>` : `
     <div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;gap:8px;">
       <span>⚠️</span>
@@ -1458,6 +1626,60 @@ function renderScanner(data, riskLevel) {
       </div>
     </div>`;
   wrapper.setAttribute('data-scanner','1');
+}
+
+// ── Confidence Calibration ────────────────────────────────────
+function calibrateConfidence(parsed, liveData) {
+  if (!parsed?.forecasts || !liveData) return;
+  const timeframes = ['week','month','year','five_year'];
+
+  // Count bullish signals
+  let bullishSignals = 0, totalSignals = 0;
+
+  if (liveData.rsi && liveData.rsi !== '—') {
+    totalSignals++;
+    const rsi = parseFloat(liveData.rsi);
+    if (rsi < 50 && rsi > 30) bullishSignals++; // recovering from oversold
+    else if (rsi > 50 && rsi < 70) bullishSignals++; // healthy bullish
+  }
+  if (liveData.macd && liveData.macdSignal && liveData.macd !== '—') {
+    totalSignals++;
+    if (parseFloat(liveData.macd) > parseFloat(liveData.macdSignal)) bullishSignals++;
+  }
+  if (liveData.volumeSignal && liveData.volumeSignal !== '—') {
+    totalSignals++;
+    if (liveData.volumeSignal.includes('High') || liveData.volumeSignal.includes('Extreme')) bullishSignals++;
+  }
+  if (liveData.sectorRelative && liveData.sectorRelative !== '—') {
+    totalSignals++;
+    if (parseFloat(liveData.sectorRelative) > 0) bullishSignals++;
+  }
+  if (liveData.analystRevision && liveData.analystRevision !== '—') {
+    totalSignals++;
+    if (liveData.analystRevision.includes('↑')) bullishSignals++;
+  }
+  if (liveData.weekPos52 && liveData.weekPos52 !== '—') {
+    totalSignals++;
+    const pos = parseFloat(liveData.weekPos52);
+    if (pos > 20 && pos < 80) bullishSignals++; // not extreme
+  }
+
+  if (totalSignals === 0) return;
+  const agreement = bullishSignals / totalSignals; // 0-1
+
+  // Adjust confidence based on signal agreement
+  for (const tf of timeframes) {
+    const f = parsed.forecasts[tf];
+    if (!f) continue;
+    const base = f.confidence || 50;
+    const isBullish = f.signal === 'BULLISH';
+    // If signals agree with forecast direction → boost; if disagree → reduce
+    const agreementBonus = isBullish
+      ? (agreement - 0.5) * 20  // max ±10
+      : ((1 - agreement) - 0.5) * 20;
+    f.confidence = Math.round(Math.min(92, Math.max(15, base + agreementBonus)));
+    f.calibrated = true;
+  }
 }
 
 function sc2cls(s) {
