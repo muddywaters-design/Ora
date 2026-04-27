@@ -224,6 +224,31 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
   .sg-grid{grid-template-columns:1fr 1fr;}
   .fc-grid{grid-template-columns:1fr 1fr;}
 }
+
+/* Light theme */
+body.light {
+  --bg: #f0f4f8;
+  --s1: #ffffff;
+  --s2: #f8fafc;
+  --s3: #eef2f7;
+  --b1: #d1dce8;
+  --b2: #b8cad8;
+  --t1: #0f1f2e;
+  --t2: #3d5c78;
+  --t3: #7a9bbf;
+  --green: #007a52;
+  --green2: #005f40;
+  --red: #cc2244;
+  --yellow: #b87800;
+  --blue: #1a6bbf;
+  --orange: #c26010;
+  --purple: #6d28d9;
+}
+body.light .live-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+body.light .logo-box { background: var(--green); }
+body.light input.ti { box-shadow: none; }
+body.light .live-pill { background: rgba(0,122,82,.08); border-color: rgba(0,122,82,.2); }
+body.light .live-label { color: var(--green); }
 </style>
 </head>
 <body>
@@ -237,9 +262,16 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
     <div class="logo-box">SO</div>
     <div class="logo-name">Stock<span>Oracle</span> Pro</div>
   </div>
-  <div class="live-pill">
-    <div class="live-dot"></div>
-    <span class="live-label" id="liveLabel">LIVE</span>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <button id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark mode"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;"
+      onmouseover="this.style.borderColor='var(--t2)'" onmouseout="this.style.borderColor='var(--b2)'">
+      ☀️
+    </button>
+    <div class="live-pill">
+      <div class="live-dot"></div>
+      <span class="live-label" id="liveLabel">LIVE</span>
+    </div>
   </div>
 </div>
 
@@ -292,7 +324,7 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
       ⚡ Opportunity Scanner — Find Stocks About to Move
     </button>
     <button onclick="showSentimentConsensus()"
-      style="background:linear-gradient(135deg,var(--purple),var(--orange));color:var(--bg);border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;"
+      style="background:linear-gradient(135deg,#7c3aed,#ea580c);color:#ffffff;border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;text-shadow:0 1px 3px rgba(0,0,0,.4);"
       onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
       🎯 Sentiment Consensus — WSB + Trends + Fear &amp; Greed
     </button>
@@ -385,6 +417,24 @@ function getApiKey() {
 }
 
 loadApiKey();
+// ── Theme Toggle ──────────────────────────────────────────────
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light');
+  const btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = isLight ? '🌙' : '☀️';
+  localStorage.setItem('so_theme', isLight ? 'light' : 'dark');
+}
+
+// Apply saved theme on load
+(function() {
+  const saved = localStorage.getItem('so_theme');
+  if (saved === 'light') {
+    document.body.classList.add('light');
+    const btn = document.getElementById('themeBtn');
+    if (btn) btn.textContent = '🌙';
+  }
+})();
+
 renderWatchlist();
 
 // ── Navigation ─────────────────────────────────────────────────
