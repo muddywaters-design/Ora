@@ -189,6 +189,29 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
 .apikey-clear:hover{border-color:var(--red);color:var(--red);}
 .apikey-status{font-family:var(--mono);font-size:9px;white-space:nowrap;flex-shrink:0;}
 
+/* Accuracy Dashboard */
+.acc-dashboard{background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;margin-bottom:16px;}
+.acc-dash-head{padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;}
+.acc-summary{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;padding:14px;}
+.acc-cube{border-radius:10px;padding:14px;text-align:center;cursor:pointer;transition:transform .15s;}
+.acc-cube:hover{transform:translateY(-2px);}
+.acc-cube-num{font-family:var(--mono);font-size:28px;font-weight:700;margin-bottom:4px;}
+.acc-cube-label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;}
+.acc-cube-sub{font-size:10px;margin-top:4px;opacity:.7;}
+.acc-cube.hit{background:rgba(0,229,160,.12);border:1px solid rgba(0,229,160,.3);color:var(--green);}
+.acc-cube.close{background:rgba(255,208,96,.1);border:1px solid rgba(255,208,96,.3);color:var(--yellow);}
+.acc-cube.miss{background:rgba(255,68,102,.1);border:1px solid rgba(255,68,102,.3);color:var(--red);}
+.acc-cube.pending{background:rgba(77,168,255,.08);border:1px solid rgba(77,168,255,.2);color:var(--blue);}
+.acc-verdict.hit{background:rgba(0,229,160,.12);color:var(--green);border:1px solid rgba(0,229,160,.3);}
+.acc-verdict.close{background:rgba(255,208,96,.1);color:var(--yellow);border:1px solid rgba(255,208,96,.3);}
+.acc-verdict.miss{background:rgba(255,68,102,.1);color:var(--red);border:1px solid rgba(255,68,102,.3);}
+.acc-verdict.pending{background:rgba(77,168,255,.08);color:var(--blue);border:1px solid rgba(77,168,255,.2);}
+.acc-detail-row{display:grid;grid-template-columns:70px 1fr 80px 80px 80px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--b1);gap:8px;font-size:12px;}
+.acc-detail-row:last-child{border-bottom:none;}
+.btn-run-all{background:linear-gradient(135deg,var(--green),var(--blue));color:var(--bg);border:none;padding:8px 16px;border-radius:8px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;transition:opacity .15s;}
+.btn-run-all:hover{opacity:.85;}
+.btn-run-all:disabled{opacity:.4;cursor:not-allowed;}
+
 /* Responsive */
 @media(max-width:800px){
   .fc-grid{grid-template-columns:1fr 1fr;}
@@ -294,8 +317,14 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
     <div class="wl-page" id="wlPage">
       <div class="wl-ph">
         <h2>Watchlist</h2>
-        <span id="wlSubtitle">0 stocks tracked</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span id="wlSubtitle">0 stocks tracked</span>
+          <button class="btn-run-all" id="runAllBtn" onclick="runAllAccuracy()" style="display:none;">
+            ⚡ Check All Forecasts
+          </button>
+        </div>
       </div>
+      <div id="accDashboard"></div>
       <div class="wl-table" id="wlTable">
         <div class="wl-empty-msg">
           No stocks tracked yet.<br>
@@ -1234,6 +1263,200 @@ function txtCard(title, text, acc) {
 
 
 // ── Watchlist ──────────────────────────────────────────────────
+// ── Run All Accuracy Check ────────────────────────────────────
+async function runAllAccuracy() {
+  if (watchlist.length === 0) return;
+  const btn = document.getElementById('runAllBtn');
+  const dashboard = document.getElementById('accDashboard');
+  if (!btn || !dashboard) return;
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Checking…';
+
+  // Show loading state
+  dashboard.innerHTML = `
+    <div class="acc-dashboard">
+      <div class="acc-dash-head">
+        <span style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">⚡ Accuracy Dashboard</span>
+        <span style="font-size:10px;color:var(--t3);">Fetching live prices for ${watchlist.length} stocks…</span>
+      </div>
+      <div style="padding:20px;text-align:center;">
+        <div style="width:200px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;margin:0 auto 12px;">
+          <div style="height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:1px;animation:la 1.5s ease-in-out infinite;"></div>
+        </div>
+        <div id="allAccStatus" style="font-family:var(--mono);font-size:10px;color:var(--t3);">Starting…</div>
+      </div>
+    </div>`;
+
+  const results = [];
+  const setStatus = (msg) => {
+    const el = document.getElementById('allAccStatus');
+    if (el) el.textContent = msg;
+  };
+
+  // Check each stock one by one
+  for (let i = 0; i < watchlist.length; i++) {
+    const entry = watchlist[i];
+    setStatus(`Checking ${entry.ticker} (${i+1}/${watchlist.length})…`);
+
+    try {
+      const forecastPrice = parseFloat((entry.data?.current_price||'').replace(/[^0-9.]/g,'')) || null;
+      const forecasts = entry.data?.forecasts || {};
+
+      // Fetch real current price
+      const liveData = await fetchLivePrice(entry.ticker);
+      const currentPrice = liveData ? parseFloat(liveData.price) : null;
+
+      let actualChangePct = null;
+      if (currentPrice && forecastPrice) {
+        actualChangePct = ((currentPrice - forecastPrice) / forecastPrice * 100);
+      }
+
+      // Evaluate week and month (most likely to have passed)
+      const weekF  = forecasts.week?.direction  || '';
+      const monthF = forecasts.month?.direction || '';
+
+      function evalForecast(forecastDir, actualPct) {
+        if (actualPct === null) return 'PENDING';
+        const fp = parseFloat(forecastDir);
+        if (isNaN(fp)) return 'PENDING';
+        const dirMatch = (fp > 0 && actualPct > 0) || (fp < 0 && actualPct < 0);
+        const magnitude = Math.abs(actualPct - fp);
+        if (dirMatch && magnitude <= 3) return 'HIT';
+        if (dirMatch && magnitude <= 8) return 'CLOSE';
+        if (dirMatch) return 'CLOSE';
+        return 'MISS';
+      }
+
+      const weekVerdict  = evalForecast(weekF, actualChangePct);
+      const monthVerdict = evalForecast(monthF, actualChangePct);
+
+      // Overall verdict = best of week/month (if either HIT, it's a HIT)
+      const overallVerdict = 
+        weekVerdict === 'HIT'  || monthVerdict === 'HIT'  ? 'HIT'  :
+        weekVerdict === 'CLOSE'|| monthVerdict === 'CLOSE'? 'CLOSE':
+        weekVerdict === 'MISS' || monthVerdict === 'MISS' ? 'MISS' : 'PENDING';
+
+      results.push({
+        ticker: entry.ticker,
+        company: entry.company,
+        forecastDate: entry.date,
+        forecastPrice: forecastPrice ? `$${forecastPrice.toFixed(2)}` : '—',
+        currentPrice: currentPrice ? `$${currentPrice.toFixed(2)}` : '—',
+        actualChange: actualChangePct !== null ? (actualChangePct >= 0 ? '+' : '') + actualChangePct.toFixed(2) + '%' : '—',
+        weekForecast: weekF || '—',
+        monthForecast: monthF || '—',
+        weekVerdict, monthVerdict, overallVerdict,
+        hasLive: !!liveData,
+      });
+    } catch(e) {
+      results.push({
+        ticker: entry.ticker, company: entry.company,
+        forecastDate: entry.date, forecastPrice:'—', currentPrice:'—',
+        actualChange:'Error', weekForecast:'—', monthForecast:'—',
+        weekVerdict:'PENDING', monthVerdict:'PENDING', overallVerdict:'PENDING',
+        hasLive: false,
+      });
+    }
+
+    // Small delay to avoid rate limiting
+    if (i < watchlist.length - 1) await new Promise(r => setTimeout(r, 500));
+  }
+
+  renderAccDashboard(results);
+  btn.disabled = false;
+  btn.textContent = '⚡ Check All Forecasts';
+}
+
+function renderAccDashboard(results) {
+  const dashboard = document.getElementById('accDashboard');
+  if (!dashboard) return;
+
+  const hits    = results.filter(r => r.overallVerdict === 'HIT').length;
+  const closes  = results.filter(r => r.overallVerdict === 'CLOSE').length;
+  const misses  = results.filter(r => r.overallVerdict === 'MISS').length;
+  const pending = results.filter(r => r.overallVerdict === 'PENDING').length;
+  const total   = results.length;
+  const evaluated = hits + closes + misses;
+  const winRate = evaluated > 0 ? Math.round((hits + closes * 0.5) / evaluated * 100) : 0;
+
+  const verdictBadge = (v) => {
+    const map = { HIT:'✓ HIT', CLOSE:'~ CLOSE', MISS:'✗ MISS', PENDING:'⏳ PENDING' };
+    const cls = { HIT:'hit', CLOSE:'close', MISS:'miss', PENDING:'pending' };
+    return `<span style="padding:3px 8px;border-radius:20px;font-family:var(--mono);font-size:9px;font-weight:700;" class="acc-verdict ${cls[v]||'pending'}">${map[v]||v}</span>`;
+  };
+
+  const detailRows = results.map(r => `
+    <div class="acc-detail-row">
+      <div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--blue);cursor:pointer;" onclick="goAnalyze('${r.ticker}')">${r.ticker}</div>
+      <div>
+        <div style="font-size:11px;color:var(--t2);">${r.forecastPrice} → <b style="color:${r.overallVerdict==='HIT'?'var(--green)':r.overallVerdict==='MISS'?'var(--red)':'var(--t1)'}">${r.currentPrice}</b></div>
+        <div style="font-size:10px;color:var(--t3);margin-top:2px;">${r.company} · ${r.forecastDate||''}</div>
+      </div>
+      <div style="font-family:var(--mono);font-size:11px;color:${r.actualChange.startsWith('+')?'var(--green)':r.actualChange.startsWith('-')?'var(--red)':'var(--t3)'};">${r.actualChange}</div>
+      <div>${verdictBadge(r.weekVerdict)}<div style="font-size:9px;color:var(--t3);margin-top:3px;">1W: ${r.weekForecast}</div></div>
+      <div>${verdictBadge(r.monthVerdict)}<div style="font-size:9px;color:var(--t3);margin-top:3px;">1M: ${r.monthForecast}</div></div>
+    </div>`).join('');
+
+  const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+
+  dashboard.innerHTML = `
+    <div class="acc-dashboard">
+      <div class="acc-dash-head">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">⚡ Accuracy Dashboard</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">${total} stocks · Updated ${d} · Win rate: <b style="color:${winRate>=60?'var(--green)':winRate>=40?'var(--yellow)':'var(--red)'}">${winRate}%</b></div>
+        </div>
+        <button onclick="document.getElementById('accDashboard').innerHTML=''" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+      </div>
+
+      <!-- 3 cubes -->
+      <div class="acc-summary">
+        <div class="acc-cube hit" onclick="scrollToVerdict('HIT')">
+          <div class="acc-cube-num">${hits}</div>
+          <div class="acc-cube-label">✓ HIT</div>
+          <div class="acc-cube-sub">Direction correct</div>
+        </div>
+        <div class="acc-cube close" onclick="scrollToVerdict('CLOSE')">
+          <div class="acc-cube-num">${closes}</div>
+          <div class="acc-cube-label">~ CLOSE</div>
+          <div class="acc-cube-sub">Near miss</div>
+        </div>
+        <div class="acc-cube miss" onclick="scrollToVerdict('MISS')">
+          <div class="acc-cube-num">${misses}</div>
+          <div class="acc-cube-label">✗ MISS</div>
+          <div class="acc-cube-sub">Wrong direction</div>
+        </div>
+      </div>
+
+      ${pending > 0 ? `<div style="padding:6px 16px 10px;"><span style="font-size:10px;color:var(--blue);">⏳ ${pending} stock${pending>1?'s':''} still pending — not enough time has passed to evaluate.</span></div>` : ''}
+
+      <!-- Detail table -->
+      <div style="border-top:1px solid var(--b1);">
+        <div class="acc-detail-row" style="background:var(--s2);">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;">Ticker</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;">Price</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;">Change</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;">1 Week</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;">1 Month</div>
+        </div>
+        ${detailRows}
+      </div>
+    </div>`;
+}
+
+function scrollToVerdict(verdict) {
+  // Could filter/highlight — for now just a visual indicator
+  document.querySelectorAll('.acc-detail-row').forEach(row => {
+    const badges = row.querySelectorAll('.acc-verdict');
+    const match = Array.from(badges).some(b => b.classList.contains(verdict.toLowerCase()));
+    row.style.opacity = match ? '1' : '0.3';
+  });
+  setTimeout(() => {
+    document.querySelectorAll('.acc-detail-row').forEach(row => row.style.opacity = '1');
+  }, 2000);
+}
+
 function addToWatchlist() {
   if (!currentResult || !currentTicker) return;
   if (watchlist.some(w => w.ticker === currentTicker)) return;
@@ -1264,6 +1487,8 @@ function removeFromWatchlist(ticker) {
 function renderWatchlist() {
   document.getElementById('wlBadge').textContent = watchlist.length;
   document.getElementById('wlSubtitle').textContent = watchlist.length + ' stock' + (watchlist.length !== 1 ? 's' : '') + ' tracked';
+  const runAllBtn = document.getElementById('runAllBtn');
+  if (runAllBtn) runAllBtn.style.display = watchlist.length > 0 ? 'block' : 'none';
 
   const tbl = document.getElementById('wlTable');
   if (watchlist.length === 0) {
