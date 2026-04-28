@@ -357,10 +357,18 @@ body.light .live-label { color: var(--green); }
           <h2 style="font-family:var(--mono);font-size:14px;font-weight:700;letter-spacing:.05em;">💼 Virtual Portfolio</h2>
           <div style="font-size:11px;color:var(--t3);margin-top:3px;">Track your virtual investments and model forecast accuracy</div>
         </div>
-        <button onclick="showAddPosition()" id="addPosBtn"
-          style="background:var(--green);color:var(--bg);border:none;padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">
-          + Add Position
-        </button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button onclick="showAddPosition()" id="addPosBtn"
+            style="background:var(--green);color:var(--bg);border:none;padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">
+            + Add Position
+          </button>
+          <button onclick="showBacktest()"
+            style="background:transparent;border:1px solid var(--blue);color:var(--blue);padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;"
+            onmouseover="this.style.background='var(--blue)';this.style.color='var(--bg)'"
+            onmouseout="this.style.background='transparent';this.style.color='var(--blue)'">
+            📅 What If I Bought...
+          </button>
+        </div>
       </div>
 
       <!-- Summary cards -->
@@ -368,6 +376,8 @@ body.light .live-label { color: var(--green); }
 
       <!-- Add position form -->
       <div id="addPositionForm" style="display:none;"></div>
+      <!-- Backtest -->
+      <div id="backtestPanel" style="display:none;"></div>
 
       <!-- Holdings table -->
       <div id="portfolioHoldings"></div>
@@ -2654,6 +2664,242 @@ function renderPortfolio() {
       </div>
       ${rows}
     </div>`;
+}
+
+// ── Backtest Engine ───────────────────────────────────────────
+function showBacktest() {
+  const panel = document.getElementById('backtestPanel');
+  const form  = document.getElementById('addPositionForm');
+  if (!panel) return;
+  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+  if (form) form.style.display = 'none';
+  panel.style.display = 'block';
+
+  const currencies = [
+    {code:'USD',flag:'🇺🇸'}, {code:'ILS',flag:'🇮🇱'},
+    {code:'EUR',flag:'🇪🇺'}, {code:'GBP',flag:'🇬🇧'},
+  ];
+
+  panel.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--blue);border-radius:12px;padding:18px;margin-bottom:16px;">
+      <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);margin-bottom:4px;">📅 What If I Bought...</div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:16px;">Simulate a past investment — see how much you would have made or lost</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Ticker</label>
+          <input id="btTicker" placeholder="NVDA" maxlength="10"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:13px;text-transform:uppercase;outline:none;"
+            oninput="this.value=this.value.toUpperCase()">
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Currency</label>
+          <select id="btCurrency"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;">
+            ${currencies.map(c => `<option value="${c.code}">${c.flag} ${c.code}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Investment Amount</label>
+          <input id="btAmount" type="number" placeholder="10000" min="0"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:13px;outline:none;">
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Buy Date</label>
+          <input id="btBuyDate" type="date"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;">
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Sell Date (or Today)</label>
+          <input id="btSellDate" type="date"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;">
+        </div>
+        <div style="display:flex;align-items:flex-end;">
+          <button onclick="document.getElementById('btSellDate').value=''"
+            style="width:100%;background:transparent;border:1px solid var(--b2);color:var(--t2);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;">
+            📅 Use Today
+          </button>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;">
+        <button onclick="runBacktest()"
+          style="background:var(--blue);color:var(--bg);border:none;padding:10px 20px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;flex:1;">
+          ⚡ Run Simulation
+        </button>
+        <button onclick="document.getElementById('backtestPanel').style.display='none'"
+          style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+
+      <div id="btResult" style="margin-top:14px;"></div>
+    </div>`;
+
+  // Set default sell date to today
+  const today = new Date().toISOString().split('T')[0];
+  document.getElementById('btSellDate').value = today;
+}
+
+async function runBacktest() {
+  const ticker   = (document.getElementById('btTicker')?.value || '').trim().toUpperCase();
+  const amount   = parseFloat(document.getElementById('btAmount')?.value || '0');
+  const currency = document.getElementById('btCurrency')?.value || 'USD';
+  const buyDate  = document.getElementById('btBuyDate')?.value;
+  const sellDate = document.getElementById('btSellDate')?.value || new Date().toISOString().split('T')[0];
+  const result   = document.getElementById('btResult');
+
+  if (!ticker || !amount || !buyDate) {
+    if (result) result.innerHTML = `<div style="color:var(--red);font-size:12px;">⚠️ Please fill in ticker, amount and buy date.</div>`;
+    return;
+  }
+
+  const btn = document.querySelector('#backtestPanel button[onclick="runBacktest()"]');
+  if (btn) { btn.textContent = '⏳ Fetching historical data…'; btn.disabled = true; }
+  if (result) result.innerHTML = `<div style="font-family:var(--mono);font-size:10px;color:var(--t3);padding:10px 0;">Fetching prices from Yahoo Finance…</div>`;
+
+  try {
+    // Fetch historical price data
+    const buyTs  = Math.floor(new Date(buyDate).getTime()/1000);
+    const sellTs = Math.floor(new Date(sellDate).getTime()/1000) + 86400;
+    const url    = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&period1=${buyTs}&period2=${sellTs}`;
+
+    let buyPrice = null, sellPrice = null, actualBuyDate = buyDate, actualSellDate = sellDate;
+    const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url=','https://api.codetabs.com/v1/proxy?quest='];
+
+    for (const proxy of proxies) {
+      try {
+        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(10000)});
+        if (!r.ok) continue;
+        const data = await r.json();
+        const result_data = data?.chart?.result?.[0];
+        const timestamps = result_data?.timestamp || [];
+        const closes     = result_data?.indicators?.quote?.[0]?.close || [];
+
+        if (timestamps.length === 0) continue;
+
+        // First available close = buy price
+        const firstValid = closes.findIndex(p => p != null);
+        const lastValid  = closes.map((p,i)=>[p,i]).filter(([p])=>p!=null).pop();
+
+        if (firstValid >= 0) {
+          buyPrice      = closes[firstValid];
+          actualBuyDate = new Date(timestamps[firstValid]*1000).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+        }
+        if (lastValid) {
+          sellPrice      = lastValid[0];
+          actualSellDate = new Date(timestamps[lastValid[1]]*1000).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+        }
+        break;
+      } catch(_) {}
+    }
+
+    if (!buyPrice || !sellPrice) throw new Error('Could not fetch historical prices. Try a different date range.');
+
+    // Get exchange rate at current time (approximate)
+    const rate = currency !== 'USD' ? await fetchExchangeRate('USD', currency) : 1;
+    const investedUSD = currency === 'USD' ? amount : amount / (rate || 1);
+    const shares      = investedUSD / buyPrice;
+    const sellValueUSD = shares * sellPrice;
+    const pnlUSD      = sellValueUSD - investedUSD;
+    const pnlPct      = (pnlUSD / investedUSD) * 100;
+    const sellValueLocal = currency === 'USD' ? sellValueUSD : sellValueUSD * (rate || 1);
+    const pnlLocal    = sellValueLocal - amount;
+
+    const isProfit = pnlUSD >= 0;
+    const col      = isProfit ? 'var(--green)' : 'var(--red)';
+    const emoji    = isProfit ? '🟢' : '🔴';
+    const fmt = (n, curr) => {
+      const sym = curr==='ILS'?'₪':curr==='EUR'?'€':curr==='GBP'?'£':'$';
+      return sym + Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    };
+
+    // Annualized return
+    const days = Math.max(1, (new Date(sellDate) - new Date(buyDate)) / 86400000);
+    const annualReturn = (Math.pow(sellValueUSD/investedUSD, 365/days) - 1) * 100;
+
+    if (result) result.innerHTML = `
+      <div style="background:var(--s2);border:1px solid ${col}40;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--t1);">${emoji} ${ticker} Simulation</span>
+          <span style="font-size:10px;color:var(--t3);">${Math.round(days)} days held</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
+          <div style="background:var(--s1);border-radius:8px;padding:10px;">
+            <div style="color:var(--t3);font-family:var(--mono);font-size:9px;text-transform:uppercase;margin-bottom:4px;">📅 Buy Date</div>
+            <div style="color:var(--t1);font-weight:600;">${actualBuyDate}</div>
+            <div style="color:var(--t3);font-size:10px;margin-top:2px;">@ $${buyPrice.toFixed(2)} USD</div>
+          </div>
+          <div style="background:var(--s1);border-radius:8px;padding:10px;">
+            <div style="color:var(--t3);font-family:var(--mono);font-size:9px;text-transform:uppercase;margin-bottom:4px;">📅 Sell Date</div>
+            <div style="color:var(--t1);font-weight:600;">${actualSellDate}</div>
+            <div style="color:var(--t3);font-size:10px;margin-top:2px;">@ $${sellPrice.toFixed(2)} USD</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div style="background:var(--s1);border-radius:8px;padding:10px;">
+            <div style="color:var(--t3);font-family:var(--mono);font-size:9px;text-transform:uppercase;margin-bottom:4px;">Invested</div>
+            <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--t1);">${fmt(amount,currency)}</div>
+            <div style="font-size:10px;color:var(--t3);">${shares.toFixed(4)} shares</div>
+          </div>
+          <div style="background:var(--s1);border-radius:8px;padding:10px;">
+            <div style="color:var(--t3);font-family:var(--mono);font-size:9px;text-transform:uppercase;margin-bottom:4px;">Would Have</div>
+            <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${col};">${fmt(sellValueLocal,currency)}</div>
+            <div style="font-size:10px;color:var(--t3);">$${sellValueUSD.toFixed(2)} USD</div>
+          </div>
+        </div>
+
+        <div style="background:${col}15;border:1px solid ${col}40;border-radius:8px;padding:12px;text-align:center;">
+          <div style="font-family:var(--mono);font-size:11px;color:var(--t3);margin-bottom:4px;">${isProfit ? '✅ PROFIT' : '❌ LOSS'}</div>
+          <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${col};">
+            ${isProfit?'+':'−'}${fmt(Math.abs(pnlLocal),currency)}
+          </div>
+          <div style="font-family:var(--mono);font-size:14px;color:${col};margin-top:2px;">
+            ${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}% total · ${annualReturn>=0?'+':''}${annualReturn.toFixed(1)}%/yr
+          </div>
+        </div>
+
+        <button onclick="addBacktestToPortfolio('${ticker}',${buyPrice},${shares},'${actualBuyDate}','${currency}',${amount})"
+          style="background:var(--green);color:var(--bg);border:none;padding:10px;border-radius:8px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;width:100%;">
+          + Add to Portfolio (at original buy price)
+        </button>
+      </div>`;
+
+  } catch(e) {
+    if (result) result.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px;">⚠️ ${e.message}</div>`;
+  } finally {
+    if (btn) { btn.textContent = '⚡ Run Simulation'; btn.disabled = false; }
+  }
+}
+
+function addBacktestToPortfolio(ticker, entryPrice, shares, entryDate, currency, invested) {
+  const position = {
+    id: Date.now(),
+    ticker,
+    notes: 'Backtest position',
+    entryPrice: parseFloat(entryPrice.toFixed(2)),
+    shares: parseFloat(shares.toFixed(6)),
+    invested: parseFloat(invested),
+    investedOriginal: invested,
+    investedCurrency: currency,
+    fractional: true,
+    entryDate,
+    currentPrice: entryPrice,
+    lastUpdated: new Date().toISOString(),
+  };
+  portfolio.positions.push(position);
+  savePortfolio();
+  document.getElementById('backtestPanel').style.display = 'none';
+  renderPortfolio();
+  alert(`✅ ${ticker} added to portfolio at $${entryPrice.toFixed(2)}`);
 }
 
 function sc2cls(s) {
