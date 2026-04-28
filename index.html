@@ -676,35 +676,50 @@ async function fetchLivePrice(ticker) {
     `https://yacdn.org/proxy/`,
   ];
   // Use query2 — often less rate-limited than query1
-  // Two separate fetches:
-  // 1) range=1d for real-time current price (meta has live price)
-  // 2) range=3mo for technicals (closes array)
-  const realtimeUrl  = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d&includePrePost=false`;
+  // Fetch 1: quote endpoint for real-time price (most accurate)
+  // Fetch 2: 3mo chart for technicals
+  const quoteUrl     = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${ticker}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,regularMarketPreviousClose,fiftyTwoWeekHigh,fiftyTwoWeekLow,marketCap,regularMarketVolume,trailingPE,epsTrailingTwelveMonths`;
   const historicalUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=3mo&includePrePost=false`;
 
   for (const proxy of proxies) {
     try {
-      // Fetch real-time price first
-      const r = await fetch(proxy + encodeURIComponent(realtimeUrl), {
-        signal: AbortSignal.timeout(9000),
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
-      if (!r.ok) continue;
-      const data = await r.json();
-      const meta = data?.chart?.result?.[0]?.meta;
-      if (!meta?.regularMarketPrice) continue;
-
-      const price = meta.regularMarketPrice;
-      const prev  = meta.chartPreviousClose || meta.regularMarketPreviousClose || price;
-      const change    = (price - prev).toFixed(2);
-      const changePct = (((price - prev) / prev) * 100).toFixed(2);
-      
-      // Fetch 3mo historical for technicals separately
-      let historicalData = data; // fallback to same data
+      // Try quote endpoint first for real-time price
+      let price, prev, change, changePct, high52, low52, marketCap, volume;
       try {
-        const r3mo = await fetch(proxy + encodeURIComponent(historicalUrl), {signal: AbortSignal.timeout(8000)});
-        if (r3mo.ok) historicalData = await r3mo.json();
+        const rq = await fetch(proxy + encodeURIComponent(quoteUrl), {signal: AbortSignal.timeout(7000), headers:{'User-Agent':'Mozilla/5.0'}});
+        if (rq.ok) {
+          const dq = await rq.json();
+          const q  = dq?.quoteResponse?.result?.[0];
+          if (q?.regularMarketPrice) {
+            price      = q.regularMarketPrice;
+            prev       = q.regularMarketPreviousClose || price;
+            change     = q.regularMarketChange?.toFixed(2) || (price-prev).toFixed(2);
+            changePct  = q.regularMarketChangePercent?.toFixed(2) || (((price-prev)/prev)*100).toFixed(2);
+            high52     = q.fiftyTwoWeekHigh?.toFixed(2);
+            low52      = q.fiftyTwoWeekLow?.toFixed(2);
+            marketCap  = q.marketCap;
+            volume     = q.regularMarketVolume;
+          }
+        }
       } catch(_) {}
+
+      // Fallback: chart endpoint with meta
+      if (!price) {
+        const fallbackUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d&includePrePost=false`;
+        const rf = await fetch(proxy + encodeURIComponent(fallbackUrl), {signal: AbortSignal.timeout(9000), headers:{'User-Agent':'Mozilla/5.0'}});
+        if (!rf.ok) continue;
+        const df   = await rf.json();
+        const meta = df?.chart?.result?.[0]?.meta;
+        if (!meta?.regularMarketPrice) continue;
+        price     = meta.regularMarketPrice;
+        prev      = meta.chartPreviousClose || meta.regularMarketPreviousClose || price;
+        change    = (price - prev).toFixed(2);
+        changePct = (((price - prev) / prev) * 100).toFixed(2);
+        high52    = meta.fiftyTwoWeekHigh?.toFixed(2);
+        low52     = meta.fiftyTwoWeekLow?.toFixed(2);
+        marketCap = meta.marketCap;
+        volume    = meta.regularMarketVolume;
+      }
 
       // Try fundamentals with same proxy
       let pe='—', eps='—', targetPrice='—', numAnalysts='—';
@@ -936,11 +951,11 @@ async function fetchLivePrice(ticker) {
 
       return {
         price: price.toFixed(2), change, changePct,
-        high52:    meta.fiftyTwoWeekHigh?.toFixed(2) || '—',
-        low52:     meta.fiftyTwoWeekLow?.toFixed(2)  || '—',
-        marketCap: meta.marketCap ? formatMarketCap(meta.marketCap) : '—',
-        volume:    meta.regularMarketVolume?.toLocaleString() || '—',
-        currency:  meta.currency || 'USD',
+        high52:    high52 || '—',
+        low52:     low52  || '—',
+        marketCap: marketCap ? formatMarketCap(marketCap) : '—',
+        volume:    volume ? volume.toLocaleString() : '—',
+        currency:  'USD',
         pe, eps, targetPrice, numAnalysts,
         rsi, macd, macdSignal, bb_upper, bb_lower, bb_mid, putCallRatio,
         avgVolume, volumeRatio, volumeSignal,
@@ -1259,7 +1274,7 @@ function renderAnalysis(ticker, d) {
     const f = fs[key] || {}; const fc = sc2cls(f.signal||'NEUTRAL');
     return `<div class="fc-cell" style="--acc:${acc}">
       <div class="fc-tf">${label}</div>
-      <div class="fc-dir ${fc}">${f.direction||'—'}</div>
+      <div class="fc-dir" style="color:${f.direction&&f.direction[0]==='-'?'var(--red)':f.direction&&f.direction[0]==='+'?'var(--green)':'var(--yellow)'}">${f.direction||'—'}</div>
       <div class="fc-rng">${f.range||'—'}</div>
       <div class="cbar"><div class="cfill" style="width:${f.confidence||0}%"></div></div>
       <div class="fc-cf"><span class="${fc}">${f.signal||'NEUTRAL'}</span><span style="color:var(--t3)">${f.confidence||0}% conf</span></div>
