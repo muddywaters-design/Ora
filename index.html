@@ -291,6 +291,10 @@ body.light .live-label { color: var(--green); }
       <span>Watchlist</span>
       <span class="nav-badge" id="wlBadge">0</span>
     </div>
+    <div class="nav-item" id="nav-portfolio" onclick="goTo('portfolio')">
+      <span class="nav-icon">💼</span>
+      <span>Portfolio</span>
+    </div>
   </div>
 </div>
 
@@ -339,6 +343,37 @@ body.light .live-label { color: var(--green); }
         Real-time data from 12+ financial sources<br>
         Weekly · Monthly · Yearly · 5-Year forecasts
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE: PORTFOLIO -->
+<div class="page" id="page-portfolio">
+  <div class="content">
+    <div style="padding:18px;max-width:860px;margin:0 auto;" id="portfolioPage">
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+        <div>
+          <h2 style="font-family:var(--mono);font-size:14px;font-weight:700;letter-spacing:.05em;">💼 Virtual Portfolio</h2>
+          <div style="font-size:11px;color:var(--t3);margin-top:3px;">Track your virtual investments and model forecast accuracy</div>
+        </div>
+        <button onclick="showAddPosition()" id="addPosBtn"
+          style="background:var(--green);color:var(--bg);border:none;padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">
+          + Add Position
+        </button>
+      </div>
+
+      <!-- Summary cards -->
+      <div id="portfolioSummary"></div>
+
+      <!-- Add position form -->
+      <div id="addPositionForm" style="display:none;"></div>
+
+      <!-- Holdings table -->
+      <div id="portfolioHoldings"></div>
+
+      <!-- P&L Chart area -->
+      <div id="portfolioPnl"></div>
     </div>
   </div>
 </div>
@@ -589,6 +624,24 @@ ${research.slice(0, 1500)}
 
 
 
+
+// ── Currency Exchange Rate ────────────────────────────────────
+async function fetchExchangeRate(from, to) {
+  if (from === to) return 1;
+  const pair = `${from}${to}=X`;
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${pair}?interval=1d&range=1d`;
+  const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url=','https://api.codetabs.com/v1/proxy?quest='];
+  for (const proxy of proxies) {
+    try {
+      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(7000)});
+      if (!r.ok) continue;
+      const data = await r.json();
+      const rate = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+      if (rate) return rate;
+    } catch(_) {}
+  }
+  return null;
+}
 
 // ── Live price fetcher ────────────────────────────────────────
 // Tries Yahoo Finance directly (works from browser, not from Claude.ai)
@@ -1140,12 +1193,6 @@ async function runAnalysis(sym) {
   }
 }
 
-function goPage(name) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  document.getElementById('nav-' + name).classList.add('active');
-}
 
 
 
@@ -2193,6 +2240,390 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
       </div>
     </div>`;
   wrapper.setAttribute('data-consensus','1');
+}
+
+// ── Portfolio ──────────────────────────────────────────────────
+let portfolio = JSON.parse(localStorage.getItem('so_portfolio') || '{"budget":10000,"positions":[]}');
+
+function savePortfolio() {
+  localStorage.setItem('so_portfolio', JSON.stringify(portfolio));
+}
+
+function goPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.getElementById('nav-' + name).classList.add('active');
+  if (name === 'portfolio') renderPortfolio();
+}
+
+function showAddPosition() {
+  const form = document.getElementById('addPositionForm');
+  if (!form) return;
+  if (form.style.display !== 'none') { form.style.display = 'none'; return; }
+
+  form.style.display = 'block';
+  const currencies = [
+    {code:'USD',flag:'🇺🇸',name:'US Dollar'},
+    {code:'ILS',flag:'🇮🇱',name:'Israeli Shekel'},
+    {code:'EUR',flag:'🇪🇺',name:'Euro'},
+    {code:'GBP',flag:'🇬🇧',name:'British Pound'},
+  ];
+
+  form.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--green);border-radius:12px;padding:18px;margin-bottom:16px;">
+      <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:14px;">+ New Position</div>
+
+      <!-- Row 1: Ticker + Type -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Ticker</label>
+          <input id="posTickerInput" placeholder="NVDA" maxlength="10"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:13px;text-transform:uppercase;outline:none;"
+            oninput="this.value=this.value.toUpperCase()" onblur="calcPosition()">
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Investment Type</label>
+          <select id="posTypeInput"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;"
+            onchange="updateValueLabel();calcPosition()">
+            <option value="amount">💵 Fixed Amount</option>
+            <option value="shares">📦 Number of Shares</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Row 2: Amount + Currency -->
+      <div style="display:grid;grid-template-columns:1fr 120px;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;" id="posValueLabel">Investment Amount</label>
+          <input id="posValueInput" type="number" placeholder="100000" min="0"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:13px;outline:none;"
+            oninput="calcPosition()">
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Currency</label>
+          <select id="posCurrencyInput"
+            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;"
+            onchange="calcPosition()">
+            ${currencies.map(cur => `<option value="${cur.code}">${cur.flag} ${cur.code}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      <!-- Row 3: Fractional shares toggle -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px 12px;background:var(--s2);border-radius:8px;border:1px solid var(--b1);">
+        <input type="checkbox" id="posFractionalInput" style="width:16px;height:16px;cursor:pointer;">
+        <div>
+          <label for="posFractionalInput" style="font-size:12px;color:var(--t1);cursor:pointer;font-weight:500;">Allow fractional shares</label>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">Some brokers (eToro, Robinhood, IBKR) support fractional shares — no minimum lot size</div>
+        </div>
+      </div>
+
+      <!-- Live calculation preview -->
+      <div id="posCalcPreview" style="margin-bottom:12px;min-height:60px;"></div>
+
+      <!-- Notes -->
+      <div style="margin-bottom:14px;">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Notes (optional)</label>
+        <input id="posNotesInput" placeholder="e.g. AI sector play, long-term hold"
+          style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;">
+      </div>
+
+      <div style="display:flex;gap:8px;">
+        <button onclick="addPosition()"
+          style="background:var(--green);color:var(--bg);border:none;padding:10px 20px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;flex:1;">
+          ✓ Add to Portfolio
+        </button>
+        <button onclick="document.getElementById('addPositionForm').style.display='none'"
+          style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+    </div>`;
+
+  document.getElementById('posFractionalInput').onchange = calcPosition;
+}
+
+function updateValueLabel() {
+  const type = document.getElementById('posTypeInput')?.value;
+  const currency = document.getElementById('posCurrencyInput')?.value || 'USD';
+  const label = document.getElementById('posValueLabel');
+  if (!label) return;
+  label.textContent = type === 'shares' ? 'Number of Shares' : `Investment Amount (${currency})`;
+}
+
+// Live calculation preview
+let _calcTimeout = null;
+function calcPosition() {
+  clearTimeout(_calcTimeout);
+  _calcTimeout = setTimeout(async () => {
+    const ticker    = (document.getElementById('posTickerInput')?.value || '').trim().toUpperCase();
+    const type      = document.getElementById('posTypeInput')?.value || 'amount';
+    const value     = parseFloat(document.getElementById('posValueInput')?.value || '0');
+    const currency  = document.getElementById('posCurrencyInput')?.value || 'USD';
+    const fractional = document.getElementById('posFractionalInput')?.checked || false;
+    const preview   = document.getElementById('posCalcPreview');
+
+    if (!preview) return;
+    if (!ticker || !value) { preview.innerHTML = ''; return; }
+
+    preview.innerHTML = `<div style="padding:10px;background:var(--s2);border:1px solid var(--b1);border-radius:8px;font-family:var(--mono);font-size:10px;color:var(--t3);">⏳ Fetching live price & exchange rate…</div>`;
+
+    try {
+      // Fetch price + exchange rate in parallel
+      const [live, rate] = await Promise.all([
+        fetchLivePrice(ticker),
+        fetchExchangeRate(currency, 'USD'),
+      ]);
+
+      if (!live?.price) {
+        preview.innerHTML = `<div style="padding:10px;background:rgba(255,68,102,.08);border:1px solid rgba(255,68,102,.2);border-radius:8px;font-size:11px;color:var(--red);">⚠️ Could not fetch price for ${ticker}</div>`;
+        return;
+      }
+
+      const priceUSD    = parseFloat(live.price);
+      const stockCurrency = live.currency || 'USD';
+
+      // Convert investment to USD
+      let investedUSD;
+      if (type === 'shares') {
+        investedUSD = value * priceUSD;
+      } else {
+        investedUSD = currency === 'USD' ? value : (rate ? value / rate : value);
+      }
+
+      // Calculate shares
+      const exactShares   = investedUSD / priceUSD;
+      const wholeShares   = Math.floor(exactShares);
+      const usedShares    = fractional ? exactShares : wholeShares;
+      const usedUSD       = usedShares * priceUSD;
+      const remainderUSD  = investedUSD - usedUSD;
+      const remainder     = currency === 'USD' ? remainderUSD : remainderUSD * (rate || 1);
+      const minInvestUSD  = priceUSD; // 1 share minimum
+      const minInvest     = currency === 'USD' ? minInvestUSD : minInvestUSD * (rate || 1);
+
+      const fmt = (n, curr) => {
+        const sym = curr==='ILS'?'₪':curr==='EUR'?'€':curr==='GBP'?'£':'$';
+        return sym + n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+      };
+
+      const fmtShares = (n) => fractional ? n.toFixed(6) : n.toFixed(0);
+
+      const canBuy = wholeShares >= 1;
+
+      preview.innerHTML = `
+        <div style="background:${canBuy?'rgba(0,229,160,.06)':'rgba(255,68,102,.06)'};border:1px solid ${canBuy?'rgba(0,229,160,.2)':'rgba(255,68,102,.2)'};border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--b1);">
+            <span style="font-size:11px;color:var(--t2);">${ticker} — Live Price</span>
+            <span style="font-size:13px;font-weight:700;color:var(--t1);">$${priceUSD.toFixed(2)} USD${currency!=='USD'&&rate?` = ${fmt(priceUSD*(rate||1),currency)}`:''}</span>
+          </div>
+          ${currency !== 'USD' && rate ? `
+          <div style="display:flex;justify-content:space-between;">
+            <span style="font-size:10px;color:var(--t3);">Exchange Rate</span>
+            <span style="font-size:10px;color:var(--t2);">1 USD = ${rate.toFixed(4)} ${currency}</span>
+          </div>` : ''}
+          <div style="display:flex;justify-content:space-between;">
+            <span style="font-size:10px;color:var(--t3);">Investment</span>
+            <span style="font-size:11px;color:var(--t1);font-weight:700;">${type==='shares'?`${value} shares`:`${fmt(value,currency)} = $${investedUSD.toFixed(2)} USD`}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:10px;color:var(--t3);">You can buy</span>
+            <span style="font-size:15px;font-weight:700;color:${canBuy?'var(--green)':'var(--red)'};">${fmtShares(usedShares)} shares ${!fractional&&exactShares>1?`<span style="font-size:10px;color:var(--t3);">(${exactShares.toFixed(4)} exact)</span>`:''}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;">
+            <span style="font-size:10px;color:var(--t3);">${fractional?'Total spent':'Actually spent'}</span>
+            <span style="font-size:11px;color:var(--t1);">${fmt(usedUSD*(rate||1),currency)} ($${usedUSD.toFixed(2)} USD)</span>
+          </div>
+          ${!fractional && canBuy ? `
+          <div style="display:flex;justify-content:space-between;">
+            <span style="font-size:10px;color:var(--t3);">Remaining (unspent)</span>
+            <span style="font-size:11px;color:var(--yellow);">${fmt(remainder,currency)} ($${remainderUSD.toFixed(2)} USD)</span>
+          </div>` : ''}
+          <div style="display:flex;justify-content:space-between;padding-top:6px;border-top:1px solid var(--b1);">
+            <span style="font-size:10px;color:var(--t3);">Minimum investment (1 share)</span>
+            <span style="font-size:10px;color:var(--t2);">$${minInvestUSD.toFixed(2)} USD${currency!=='USD'?` = ${fmt(minInvest,currency)}`:''}${!canBuy?` — <span style="color:var(--red)">insufficient funds</span>`:''}</span>
+          </div>
+        </div>`;
+    } catch(e) {
+      preview.innerHTML = `<div style="padding:10px;background:rgba(255,68,102,.08);border:1px solid rgba(255,68,102,.2);border-radius:8px;font-size:11px;color:var(--red);">⚠️ ${e.message}</div>`;
+    }
+  }, 800); // debounce 800ms
+}
+
+async function addPosition() {
+  const ticker     = (document.getElementById('posTickerInput')?.value || '').trim().toUpperCase();
+  const type       = document.getElementById('posTypeInput')?.value || 'amount';
+  const value      = parseFloat(document.getElementById('posValueInput')?.value || '0');
+  const currency   = document.getElementById('posCurrencyInput')?.value || 'USD';
+  const fractional = document.getElementById('posFractionalInput')?.checked || false;
+  const notes      = document.getElementById('posNotesInput')?.value || '';
+
+  if (!ticker || !value) { alert('Please enter a ticker and amount.'); return; }
+
+  const btn = document.querySelector('#addPositionForm button');
+  if (btn) { btn.textContent = '⏳ Fetching price…'; btn.disabled = true; }
+
+  // Get current price + exchange rate
+  const [live, rate] = await Promise.all([
+    fetchLivePrice(ticker),
+    fetchExchangeRate(currency, 'USD'),
+  ]);
+
+  const entryPrice = live ? parseFloat(live.price) : 0;
+  if (!entryPrice) { alert('Could not fetch live price. Try again.'); if (btn) { btn.textContent = '✓ Add to Portfolio'; btn.disabled = false; } return; }
+
+  // Convert to USD
+  let investedUSD;
+  if (type === 'shares') {
+    investedUSD = value * entryPrice;
+  } else {
+    investedUSD = currency === 'USD' ? value : (rate ? value / rate : value);
+  }
+
+  const exactShares = investedUSD / entryPrice;
+  const shares      = fractional ? exactShares : Math.floor(exactShares);
+  const invested    = shares * entryPrice; // actual USD spent
+
+  if (shares < (fractional ? 0.000001 : 1)) {
+    alert(`Insufficient funds. Minimum 1 share costs $${entryPrice.toFixed(2)} USD.`);
+    if (btn) { btn.textContent = '✓ Add to Portfolio'; btn.disabled = false; }
+    return;
+  }
+
+  const position = {
+    id: Date.now(),
+    ticker, notes,
+    entryPrice: parseFloat(entryPrice.toFixed(2)),
+    shares: parseFloat(shares.toFixed(6)),
+    invested: parseFloat(invested.toFixed(2)),
+    investedOriginal: value,
+    investedCurrency: currency,
+    fractional,
+    entryDate: new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
+    currentPrice: entryPrice,
+    lastUpdated: new Date().toISOString(),
+  };
+
+  portfolio.positions.push(position);
+  savePortfolio();
+  document.getElementById('addPositionForm').style.display = 'none';
+  renderPortfolio();
+}
+
+async function refreshPortfolio() {
+  const btn = document.getElementById('refreshPortfolioBtn');
+  if (btn) { btn.textContent = '⏳ Updating…'; btn.disabled = true; }
+
+  for (const pos of portfolio.positions) {
+    try {
+      const live = await fetchLivePrice(pos.ticker);
+      if (live?.price) {
+        pos.currentPrice = parseFloat(live.price);
+        pos.lastUpdated = new Date().toISOString();
+      }
+    } catch(_) {}
+    await new Promise(r => setTimeout(r, 400));
+  }
+  savePortfolio();
+  renderPortfolio();
+  if (btn) { btn.textContent = '↻ Refresh Prices'; btn.disabled = false; }
+}
+
+function removePosition(id) {
+  portfolio.positions = portfolio.positions.filter(p => p.id !== id);
+  savePortfolio();
+  renderPortfolio();
+}
+
+function renderPortfolio() {
+  const summary = document.getElementById('portfolioSummary');
+  const holdings = document.getElementById('portfolioHoldings');
+  if (!summary || !holdings) return;
+
+  const positions = portfolio.positions;
+
+  if (positions.length === 0) {
+    summary.innerHTML = '';
+    holdings.innerHTML = `
+      <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:48px;text-align:center;color:var(--t3);">
+        <div style="font-size:40px;opacity:.2;margin-bottom:12px;">💼</div>
+        <div style="font-family:var(--mono);font-size:13px;color:var(--t2);margin-bottom:6px;">Portfolio is empty</div>
+        <div style="font-size:12px;">Click "+ Add Position" to start tracking your virtual investments</div>
+      </div>`;
+    return;
+  }
+
+  // Calculate totals
+  const totalInvested = positions.reduce((a, p) => a + p.invested, 0);
+  const totalCurrent  = positions.reduce((a, p) => a + (p.currentPrice * p.shares), 0);
+  const totalPnl      = totalCurrent - totalInvested;
+  const totalPnlPct   = totalInvested > 0 ? (totalPnl / totalInvested * 100) : 0;
+  const pnlCol        = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+  // Summary cards
+  summary.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;">
+      ${[
+        { label:'Total Invested', value:'$'+totalInvested.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}), color:'var(--t1)' },
+        { label:'Current Value', value:'$'+totalCurrent.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}), color:'var(--blue)' },
+        { label:'Total P&L', value:(totalPnl>=0?'+':'')+'$'+totalPnl.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}), color:pnlCol },
+        { label:'Return', value:(totalPnlPct>=0?'+':'')+totalPnlPct.toFixed(2)+'%', color:pnlCol },
+      ].map(s => `
+        <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:14px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">${s.label}</div>
+          <div style="font-family:var(--mono);font-size:16px;font-weight:700;color:${s.color};">${s.value}</div>
+        </div>`).join('')}
+    </div>`;
+
+  // Holdings table
+  const rows = positions.map(p => {
+    const currentVal = p.currentPrice * p.shares;
+    const pnl = currentVal - p.invested;
+    const pnlPct = p.invested > 0 ? (pnl / p.invested * 100) : 0;
+    const pnlCol = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const weight = totalCurrent > 0 ? (currentVal / totalCurrent * 100) : 0;
+
+    return `
+      <div style="display:grid;grid-template-columns:70px 1fr 80px 80px 90px 90px 50px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--b1);gap:8px;">
+        <div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--blue);cursor:pointer;" onclick="goAnalyze('${p.ticker}')">${p.ticker}</div>
+        <div>
+          <div style="font-size:11px;color:var(--t2);">${p.shares.toFixed(4)} shares</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">${p.entryDate} · $${p.entryPrice.toFixed(2)} entry</div>
+          ${p.notes ? `<div style="font-size:10px;color:var(--t3);font-style:italic;margin-top:1px;">${p.notes}</div>` : ''}
+        </div>
+        <div style="font-family:var(--mono);font-size:12px;color:var(--t1);">$${p.currentPrice.toFixed(2)}</div>
+        <div style="font-family:var(--mono);font-size:12px;color:var(--t2);">$${currentVal.toFixed(2)}</div>
+        <div style="font-family:var(--mono);font-size:12px;color:${pnlCol};">${pnl>=0?'+':''}$${pnl.toFixed(2)}</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;color:${pnlCol};">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}%</div>
+          <div style="height:3px;background:var(--b2);border-radius:2px;margin-top:4px;overflow:hidden;">
+            <div style="height:100%;width:${Math.min(100,weight)}%;background:var(--blue);border-radius:2px;"></div>
+          </div>
+          <div style="font-size:9px;color:var(--t3);margin-top:2px;">${weight.toFixed(1)}% of portfolio</div>
+        </div>
+        <button onclick="removePosition(${p.id})" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:14px;padding:4px;">✕</button>
+      </div>`;
+  }).join('');
+
+  const lastUpdated = positions.length > 0
+    ? new Date(Math.max(...positions.map(p=>new Date(p.lastUpdated||0)))).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})
+    : '—';
+
+  holdings.innerHTML = `
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
+      <div style="padding:11px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-family:var(--mono);font-size:10px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;">${positions.length} Position${positions.length!==1?'s':''} · Updated ${lastUpdated}</span>
+        <button id="refreshPortfolioBtn" onclick="refreshPortfolio()"
+          style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:6px 12px;border-radius:7px;font-family:var(--mono);font-size:10px;cursor:pointer;">
+          ↻ Refresh Prices
+        </button>
+      </div>
+      <div style="background:var(--s2);display:grid;grid-template-columns:70px 1fr 80px 80px 90px 90px 50px;padding:8px 16px;gap:8px;">
+        ${['Ticker','Position','Price','Value','P&L','Return %',''].map(h=>`<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;">${h}</div>`).join('')}
+      </div>
+      ${rows}
+    </div>`;
 }
 
 function sc2cls(s) {
