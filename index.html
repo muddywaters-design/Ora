@@ -2376,7 +2376,7 @@ function calcPosition() {
       // Fetch price + exchange rate in parallel
       const [live, rate] = await Promise.all([
         fetchLivePrice(ticker),
-        fetchExchangeRate(currency, 'USD'),
+        fetchExchangeRate('USD', currency), // rate = how many currency units per 1 USD (e.g. 3.7 for ILS)
       ]);
 
       if (!live?.price) {
@@ -2384,10 +2384,11 @@ function calcPosition() {
         return;
       }
 
-      const priceUSD    = parseFloat(live.price);
-      const stockCurrency = live.currency || 'USD';
+      const priceUSD = parseFloat(live.price);
 
       // Convert investment to USD
+      // rate = currency per USD (e.g. 3.7 ILS per 1 USD)
+      // investedUSD = investedCurrency / rate
       let investedUSD;
       if (type === 'shares') {
         investedUSD = value * priceUSD;
@@ -2401,9 +2402,9 @@ function calcPosition() {
       const usedShares    = fractional ? exactShares : wholeShares;
       const usedUSD       = usedShares * priceUSD;
       const remainderUSD  = investedUSD - usedUSD;
-      const remainder     = currency === 'USD' ? remainderUSD : remainderUSD * (rate || 1);
+      const remainder     = currency === 'USD' ? remainderUSD : remainderUSD * (rate || 1); // remainderUSD * rate = remainder in local currency
       const minInvestUSD  = priceUSD; // 1 share minimum
-      const minInvest     = currency === 'USD' ? minInvestUSD : minInvestUSD * (rate || 1);
+      const minInvest     = currency === 'USD' ? minInvestUSD : minInvestUSD * (rate || 1); // convert USD to local
 
       const fmt = (n, curr) => {
         const sym = curr==='ILS'?'₪':curr==='EUR'?'€':curr==='GBP'?'£':'$';
@@ -2423,7 +2424,7 @@ function calcPosition() {
           ${currency !== 'USD' && rate ? `
           <div style="display:flex;justify-content:space-between;">
             <span style="font-size:10px;color:var(--t3);">Exchange Rate</span>
-            <span style="font-size:10px;color:var(--t2);">1 USD = ${rate.toFixed(4)} ${currency}</span>
+            <span style="font-size:10px;color:var(--t2);">1 USD = ${rate.toFixed(4)} ${currency} &nbsp;·&nbsp; 1 ${currency} = ${(1/rate).toFixed(4)} USD</span>
           </div>` : ''}
           <div style="display:flex;justify-content:space-between;">
             <span style="font-size:10px;color:var(--t3);">Investment</span>
@@ -2470,13 +2471,13 @@ async function addPosition() {
   // Get current price + exchange rate
   const [live, rate] = await Promise.all([
     fetchLivePrice(ticker),
-    fetchExchangeRate(currency, 'USD'),
+    fetchExchangeRate('USD', currency), // rate = currency per 1 USD (e.g. 3.7 ILS/USD)
   ]);
 
   const entryPrice = live ? parseFloat(live.price) : 0;
   if (!entryPrice) { alert('Could not fetch live price. Try again.'); if (btn) { btn.textContent = '✓ Add to Portfolio'; btn.disabled = false; } return; }
 
-  // Convert to USD
+  // Convert to USD: investedUSD = investedCurrency / rate
   let investedUSD;
   if (type === 'shares') {
     investedUSD = value * entryPrice;
