@@ -2275,7 +2275,7 @@ function showAddPosition() {
       <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:14px;">+ New Position</div>
 
       <!-- Row 1: Ticker + Type -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;min-width:0;">
         <div>
           <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Ticker</label>
           <input id="posTickerInput" placeholder="NVDA" maxlength="10"
@@ -2293,21 +2293,23 @@ function showAddPosition() {
         </div>
       </div>
 
-      <!-- Row 2: Amount + Currency -->
-      <div style="display:grid;grid-template-columns:1fr 120px;gap:10px;margin-bottom:10px;">
-        <div>
-          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;" id="posValueLabel">Investment Amount</label>
-          <input id="posValueInput" type="number" placeholder="100000" min="0"
-            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:13px;outline:none;"
-            oninput="calcPosition()">
-        </div>
-        <div>
-          <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Currency</label>
-          <select id="posCurrencyInput"
-            style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;"
-            onchange="calcPosition()">
-            ${currencies.map(cur => `<option value="${cur.code}">${cur.flag} ${cur.code}</option>`).join('')}
-          </select>
+      <!-- Row 2: Amount + Currency — stacked on mobile -->
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:10px;">
+        <div style="display:grid;grid-template-columns:1fr 110px;gap:10px;">
+          <div>
+            <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;" id="posValueLabel">Investment Amount</label>
+            <input id="posValueInput" type="number" placeholder="100000" min="0"
+              style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:13px;outline:none;"
+              oninput="calcPosition()">
+          </div>
+          <div>
+            <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Currency</label>
+            <select id="posCurrencyInput"
+              style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;"
+              onchange="calcPosition()">
+              ${currencies.map(cur => `<option value="${cur.code}">${cur.flag} ${cur.code}</option>`).join('')}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -2459,7 +2461,8 @@ async function addPosition() {
   const fractional = document.getElementById('posFractionalInput')?.checked || false;
   const notes      = document.getElementById('posNotesInput')?.value || '';
 
-  if (!ticker || !value) { alert('Please enter a ticker and amount.'); return; }
+  if (!ticker) { alert('Please enter a ticker symbol.'); return; }
+  if (!value || value <= 0) { alert('Please enter an investment amount greater than 0.'); return; }
 
   const btn = document.querySelector('#addPositionForm button');
   if (btn) { btn.textContent = '⏳ Fetching price…'; btn.disabled = true; }
