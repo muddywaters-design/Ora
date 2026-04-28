@@ -676,11 +676,16 @@ async function fetchLivePrice(ticker) {
     `https://yacdn.org/proxy/`,
   ];
   // Use query2 — often less rate-limited than query1
-  const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=3mo&includePrePost=false`;
+  // Two separate fetches:
+  // 1) range=1d for real-time current price (meta has live price)
+  // 2) range=3mo for technicals (closes array)
+  const realtimeUrl  = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d&includePrePost=false`;
+  const historicalUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=3mo&includePrePost=false`;
 
   for (const proxy of proxies) {
     try {
-      const r = await fetch(proxy + encodeURIComponent(yahooUrl), {
+      // Fetch real-time price first
+      const r = await fetch(proxy + encodeURIComponent(realtimeUrl), {
         signal: AbortSignal.timeout(9000),
         headers: { 'User-Agent': 'Mozilla/5.0' }
       });
@@ -693,6 +698,13 @@ async function fetchLivePrice(ticker) {
       const prev  = meta.chartPreviousClose || meta.regularMarketPreviousClose || price;
       const change    = (price - prev).toFixed(2);
       const changePct = (((price - prev) / prev) * 100).toFixed(2);
+      
+      // Fetch 3mo historical for technicals separately
+      let historicalData = data; // fallback to same data
+      try {
+        const r3mo = await fetch(proxy + encodeURIComponent(historicalUrl), {signal: AbortSignal.timeout(8000)});
+        if (r3mo.ok) historicalData = await r3mo.json();
+      } catch(_) {}
 
       // Try fundamentals with same proxy
       let pe='—', eps='—', targetPrice='—', numAnalysts='—';
@@ -709,10 +721,10 @@ async function fetchLivePrice(ticker) {
         }
       } catch(_) {}
 
-      // Technicals — reuse main chart data (already fetched with range=3mo)
+      // Technicals — use 3mo historical data
       let rsi='—', macd='—', macdSignal='—', bb_upper='—', bb_lower='—', bb_mid='—', putCallRatio='—';
       try {
-          const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [];
+          const closes = historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [];
           if (closes.length >= 20) {
             rsi      = calcRSI(closes).toFixed(1);
             const {macdLine, signalLine} = calcMACD(closes);
@@ -741,7 +753,7 @@ async function fetchLivePrice(ticker) {
       // Volume analysis — compare today vs 20-day average
       let volumeSignal = '—', avgVolume = '—', volumeRatio = '—';
       try {
-        const vols = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.volume?.filter(x=>x!=null) || [];
+        const vols = historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.volume?.filter(x=>x!=null) || [];
         if (vols.length >= 20) {
           const todayVol = vols[vols.length-1];
           const avg20 = vols.slice(-21,-1).reduce((a,b)=>a+b,0) / 20;
