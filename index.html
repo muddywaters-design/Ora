@@ -341,7 +341,7 @@ body.light .live-label { color: var(--green); }
       <div class="empty-desc">
         Enter a ticker and press RUN<br>
         Real-time data from 12+ financial sources<br>
-        Weekly · Monthly · Yearly · 5-Year forecasts
+        Weekly · Monthly · Yearly · Weekly · Monthly · 6-Month · Yearly forecasts
       </div>
     </div>
   </div>
@@ -561,7 +561,7 @@ async function toJSONEnsemble(prompt) {
   // Use first result as base, average confidence scores and directions
   const base = JSON.parse(JSON.stringify(parsed[0]));
 
-  const timeframes = ['week','month','year','five_year'];
+  const timeframes = ['week','month','half_year','year'];
   for (const tf of timeframes) {
     const forecasts = parsed.map(p => p.forecasts?.[tf]).filter(Boolean);
     if (forecasts.length < 2) continue;
@@ -618,9 +618,19 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData) {
   const insiderCtx = insiderData ? `InsiderActivity:${insiderData.net}(${insiderData.buys}buys,${insiderData.sells}sells in 90d).` : '';
   const trendsCtx  = trendsData  ? `GoogleTrends:${trendsData.signal},${trendsData.trend_change}%change.` : '';
   const fg = fgData ? `Fear&Greed: ${fgData.score}/100 (${fgData.rating}).` : '';
-  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx}
+  const breakoutCtx = (() => {
+    if (!liveData?.price || !liveData?.high52 || !liveData?.low52) return '';
+    const p=parseFloat(liveData.price), h=parseFloat(liveData.high52), l=parseFloat(liveData.low52);
+    if (!h||!l) return '';
+    const pH=((p-h)/h*100).toFixed(1), pL=((p-l)/l*100).toFixed(1);
+    if (parseFloat(pH)>0) return `52W-BREAKOUT:above52Whigh-strongBullish!`;
+    if (Math.abs(parseFloat(pH))<3) return `Near52WHigh(${pH}%away).`;
+    if (parseFloat(pL)<6) return `Near52WLow(+${pL}%fromLow).`;
+    return '';
+  })();
+  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx}
 Reply with ONLY JSON (no markdown):
-{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"X"},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
+{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
 
 function mkResearchPrompt(ticker) { return mkSinglePrompt(ticker, null); }
@@ -630,7 +640,7 @@ function mkJSONPrompt(ticker, research) {
 
 ${research.slice(0, 1500)}
 
-{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":68,"signal":"BULLISH","reasoning":"Short reason."},"month":{"direction":"+X%","range":"$X-$X","confidence":60,"signal":"BULLISH","reasoning":"Short reason."},"year":{"direction":"+X%","range":"$X-$X","confidence":50,"signal":"BULLISH","reasoning":"Short reason."},"five_year":{"direction":"+X%","range":"$X-$X","confidence":38,"signal":"BULLISH","reasoning":"Short reason."}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
+{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"Short reason."},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"Short reason."},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"Short reason."},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"Short reason."}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
 }
 
 
@@ -1229,10 +1239,10 @@ function renderAnalysis(ticker, d) {
   const tracked = watchlist.some(w => w.ticker === ticker);
 
   const fgrid = [
-    {key:'week',     label:'1 WEEK',  acc:'var(--green)'},
-    {key:'month',    label:'1 MONTH', acc:'var(--blue)'},
-    {key:'year',     label:'1 YEAR',  acc:'var(--yellow)'},
-    {key:'five_year',label:'5 YEARS', acc:'var(--orange)'},
+    {key:'week',      label:'1 WEEK',   acc:'var(--green)'},
+    {key:'month',     label:'1 MONTH',  acc:'var(--blue)'},
+    {key:'half_year', label:'6 MONTHS', acc:'var(--yellow)'},
+    {key:'year',      label:'1 YEAR',   acc:'var(--orange)'},
   ].map(({key,label,acc}) => {
     const f = fs[key] || {}; const fc = sc2cls(f.signal||'NEUTRAL');
     return `<div class="fc-cell" style="--acc:${acc}">
@@ -1666,7 +1676,7 @@ async function checkAccuracy(ticker) {
     const w=forecasts.week?.direction||'N/A', wr=forecasts.week?.range||'';
     const m=forecasts.month?.direction||'N/A', mr=forecasts.month?.range||'';
     const y=forecasts.year?.direction||'N/A', yr=forecasts.year?.range||'';
-    const fy=forecasts.five_year?.direction||'N/A', fyr=forecasts.five_year?.range||'';
+    const hy=forecasts.half_year?.direction||'N/A', hyr=forecasts.half_year?.range||'';
 
     // Step 3: Build accuracy results using REAL price
     const results = [];
@@ -1714,7 +1724,7 @@ async function checkAccuracy(ticker) {
         { timeframe:'1 Week',  forecast:w,  forecast_range:wr,  actual_change:weekResult.actual,  verdict:weekResult.verdict,  note:weekResult.note  },
         { timeframe:'1 Month', forecast:m,  forecast_range:mr,  actual_change:monthResult.actual, verdict:monthResult.verdict, note:monthResult.note },
         { timeframe:'1 Year',  forecast:y,  forecast_range:yr,  actual_change:yearResult.actual,  verdict:'PENDING',           note:yearResult.note  },
-        { timeframe:'5 Years', forecast:fy, forecast_range:fyr, actual_change:fyResult.actual,    verdict:'PENDING',           note:fyResult.note    },
+        { timeframe:'6 Months', forecast:fy, forecast_range:fyr, actual_change:fyResult.actual,    verdict:'PENDING',           note:fyResult.note    },
       ],
       accuracy_score: '2/4 evaluable',
       summary: liveData
@@ -1981,7 +1991,7 @@ function renderScanner(data, riskLevel) {
 // ── Confidence Calibration ────────────────────────────────────
 function calibrateConfidence(parsed, liveData) {
   if (!parsed?.forecasts || !liveData) return;
-  const timeframes = ['week','month','year','five_year'];
+  const timeframes = ['week','month','half_year','year'];
 
   // Count bullish signals
   let bullishSignals = 0, totalSignals = 0;
