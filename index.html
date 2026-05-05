@@ -1122,26 +1122,43 @@ async function runAnalysis(sym) {
   document.getElementById('runBtn').disabled = true;
   document.getElementById('liveLabel').textContent = 'FETCHING…';
 
-  const steps = ['Yahoo Finance & Reuters…','Bloomberg & CNBC…','MarketWatch & Seeking Alpha…','Benzinga & Finviz…','TradingView & Motley Fool…','Investing.com & The Street…','Building forecast model…'];
+  const steps = [
+    '📡 Fetching live price & exchange rate…',
+    '📊 Loading historical data & technicals…',
+    '🔍 Analyzing RSI, MACD, Bollinger Bands…',
+    '🏢 Checking sector & analyst data…',
+    '🧠 Running Model 1 / 3…',
+    '🧠 Running Model 2 / 3…',
+    '🧠 Running Model 3 / 3…',
+    '🔀 Merging ensemble results…',
+  ];
   showAnalyzeLoading(t, steps);
 
+  // Realistic step timing — market data first, then Claude calls
   let stepIdx = 0;
-  const iv = setInterval(() => {
-    stepIdx++;
-    const els = document.querySelectorAll('.lstep-item');
-    if (stepIdx < els.length) {
-      if (els[stepIdx - 1]) { els[stepIdx - 1].className = 'lstep-done'; els[stepIdx - 1].textContent = '✓ ' + steps[stepIdx - 1]; }
-      if (els[stepIdx]) { els[stepIdx].className = 'lstep-act'; }
-    }
-  }, 1600);
+  const stepTimes = [800, 1200, 1400, 2000, 4000, 4000, 4000, 1000];
+  let cumulativeDelay = 0;
+  const stepTimers = stepTimes.map((delay, i) => {
+    cumulativeDelay += delay;
+    return setTimeout(() => {
+      const els = document.querySelectorAll('.lstep-item');
+      if (els[i]) { els[i].className = 'lstep-done'; els[i].textContent = '✓ ' + steps[i].replace(/^[^\s]+ /, ''); }
+      if (els[i+1]) els[i+1].className = 'lstep-act';
+    }, cumulativeDelay);
+  });
+  const iv = { clear: () => stepTimers.forEach(t => clearTimeout(t)) };
 
   try {
-    // Fetch all data sources in parallel
+    // Fetch all data sources in parallel for speed
     const [liveData, insiderData, trendsData] = await Promise.allSettled([
       fetchLivePrice(t),
       fetchInsiderTrading(t),
       fetchGoogleTrends(t),
     ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : null));
+    // Mark data fetch complete
+    const els2 = document.querySelectorAll('.lstep-item');
+    [0,1,2,3].forEach(i => { if(els2[i]) { els2[i].className='lstep-done'; } });
+    if(els2[4]) els2[4].className='lstep-act';
     const fgData = null;
     if (!liveData) {
       // Show warning in loading area
@@ -1230,11 +1247,12 @@ async function runAnalysis(sym) {
     // Auto-calibrate confidence based on data signal agreement
     calibrateConfidence(parsed, liveData);
     currentResult = parsed;
-    clearInterval(iv);
+    iv.clear();
+    clearInterval(window._elapsedInterval);
     renderAnalysis(t, parsed);
     document.getElementById('liveLabel').textContent = 'LIVE';
   } catch (e) {
-    clearInterval(iv);
+    iv.clear();
     document.getElementById('analyzeContent').innerHTML = `<div class="err-box">⚠️ ${e.message}</div>`;
     document.getElementById('liveLabel').textContent = 'ERROR';
   } finally {
@@ -1250,11 +1268,24 @@ function showAnalyzeLoading(ticker, steps) {
   document.getElementById('analyzeContent').innerHTML = `
     <div class="loading">
       <div class="loading-sym">${ticker}</div>
+      <div style="font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:-8px;margin-bottom:4px;">
+        🔀 3-Model Ensemble &nbsp;·&nbsp; <span id="elapsedTimer">0s</span>
+      </div>
       <div class="lbar"><div class="lfill"></div></div>
       <div class="lsteps">
         ${steps.map((s, i) => `<div class="lstep-item${i===0?' lstep-act':''}">${i===0?'▶ '+s:'  '+s}</div>`).join('')}
       </div>
+      <div style="font-size:10px;color:var(--t3);margin-top:10px;text-align:center;line-height:1.6;">
+        Ensemble analysis takes ~20-30s for maximum accuracy
+      </div>
     </div>`;
+  const start = Date.now();
+  clearInterval(window._elapsedInterval);
+  window._elapsedInterval = setInterval(() => {
+    const el = document.getElementById('elapsedTimer');
+    if (el) el.textContent = Math.round((Date.now()-start)/1000) + 's';
+    else clearInterval(window._elapsedInterval);
+  }, 1000);
 }
 
 // ── Render: Analysis ───────────────────────────────────────────
