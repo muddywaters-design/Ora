@@ -332,6 +332,11 @@ body.light .live-label { color: var(--green); }
       onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
       🎯 Sentiment Consensus — WSB + Trends + Fear &amp; Greed
     </button>
+    <button onclick="showPennyScanner()"
+      style="background:linear-gradient(135deg,#b45309,#dc2626);color:#ffffff;border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;text-shadow:0 1px 3px rgba(0,0,0,.4);"
+      onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+      🎰 Penny Stock Scanner — Bullish picks under $0.004
+    </button>
   </div>
   </div>
   <div class="content" id="analyzeContent">
@@ -2981,6 +2986,155 @@ function addBacktestToPortfolio(ticker, entryPrice, shares, entryDate, currency,
   document.getElementById('backtestPanel').style.display = 'none';
   renderPortfolio();
   alert(`✅ ${ticker} added to portfolio at $${entryPrice.toFixed(2)}`);
+}
+
+// ── Penny Stock Scanner ───────────────────────────────────────
+function showPennyScanner() {
+  const content = document.getElementById('analyzeContent');
+  const ex = content.querySelector('[data-penny]');
+  if (ex) { ex.remove(); return; }
+
+  const wrapper = document.createElement('div');
+  wrapper.setAttribute('data-penny','1');
+  wrapper.style.cssText = 'padding:14px 14px 0;';
+  wrapper.innerHTML = `
+    <div style="background:var(--s1);border:1px solid rgba(220,38,38,.3);border-radius:12px;overflow:hidden;">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--b1);background:rgba(220,38,38,.06);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:#ef4444;">🎰 Penny Stock Scanner</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">All exchanges incl. OTC/Pink Sheets · Under $0.004</div>
+        </div>
+        <button onclick="this.closest('[data-penny]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+      </div>
+      <div style="padding:12px 16px;background:rgba(251,191,36,.06);border-bottom:1px solid rgba(251,191,36,.2);">
+        <div style="font-size:11px;color:#fbbf24;line-height:1.6;">
+          ⚠️ <b>High Risk Warning:</b> Penny stocks under $0.004 carry extreme risk — low liquidity, high volatility, and susceptibility to pump-and-dump schemes. This is for research only, not financial advice. Never invest more than you can afford to lose entirely.
+        </div>
+      </div>
+      <div style="padding:12px 16px;display:flex;flex-direction:column;gap:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Max Price</label>
+            <select id="pennyMaxPrice" style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;">
+              <option value="0.004">$0.004 (sub-penny)</option>
+              <option value="0.01">$0.01 (1 cent)</option>
+              <option value="0.05">$0.05 (5 cents)</option>
+              <option value="0.10">$0.10 (10 cents)</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Signal Focus</label>
+            <select id="pennySignal" style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;">
+              <option value="bullish">🟢 Bullish momentum</option>
+              <option value="volume">📈 Unusual volume spike</option>
+              <option value="breakout">🚀 Price breakout</option>
+              <option value="all">⚡ All signals</option>
+            </select>
+          </div>
+        </div>
+        <button onclick="runPennyScanner()"
+          style="background:#dc2626;color:#fff;border:none;padding:11px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;width:100%;">
+          ⚡ Scan Now
+        </button>
+      </div>
+      <div id="pennyResults"></div>
+    </div>`;
+  content.insertBefore(wrapper, content.firstChild);
+}
+
+async function runPennyScanner() {
+  const maxPrice = parseFloat(document.getElementById('pennyMaxPrice')?.value || '0.004');
+  const signal   = document.getElementById('pennySignal')?.value || 'bullish';
+  const results  = document.getElementById('pennyResults');
+  if (!results) return;
+
+  const btn = document.querySelector('[data-penny] button[onclick="runPennyScanner()"]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning all exchanges…'; }
+
+  results.innerHTML = `
+    <div style="padding:20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px;">
+      <div style="width:160px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;">
+        <div style="height:100%;background:linear-gradient(90deg,#dc2626,#f97316);border-radius:1px;animation:la 1.5s ease-in-out infinite;"></div>
+      </div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--t3);">Scanning NASDAQ, NYSE, AMEX, OTC, Pink Sheets…</div>
+    </div>`;
+
+  const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const signalDesc = {
+    bullish: 'bullish momentum, positive price trend, increasing buying pressure',
+    volume: 'unusual volume spikes (10x+ average), high interest',
+    breakout: 'recent price breakouts above resistance, new highs',
+    all: 'any combination of bullish momentum, volume spikes, or breakouts'
+  }[signal];
+
+  const prompt = `${d}. You are a penny stock analyst. Find 5 real, currently trading stocks priced under $${maxPrice} with ${signalDesc}. Include stocks from ALL US exchanges: NASDAQ, NYSE, AMEX, OTC Markets, and Pink Sheets.
+
+For each stock provide real current data. Start with { end with }. Output ONLY this JSON:
+{"scanned_date":"${d}","max_price":"$${maxPrice}","signal_type":"${signal}","disclaimer":"Extreme risk. Not financial advice.","stocks":[{"rank":1,"ticker":"X","company":"Full Company Name","exchange":"OTC","current_price":"$0.00X","price_change_24h":"+XX%","volume_ratio":"XXx avg","market_cap":"$XXX","why_bullish":"2 sentences with specific signals.","catalyst":"One sentence upcoming catalyst.","risk_level":"EXTREME","confidence":45},{"rank":2,"ticker":"X","company":"X","exchange":"Pink Sheets","current_price":"$0.00X","price_change_24h":"+XX%","volume_ratio":"XXx avg","market_cap":"$XXX","why_bullish":"2 sentences.","catalyst":"One sentence.","risk_level":"EXTREME","confidence":38},{"rank":3,"ticker":"X","company":"X","exchange":"NASDAQ","current_price":"$0.00X","price_change_24h":"+XX%","volume_ratio":"XXx avg","market_cap":"$XXX","why_bullish":"2 sentences.","catalyst":"One sentence.","risk_level":"EXTREME","confidence":35},{"rank":4,"ticker":"X","company":"X","exchange":"OTC","current_price":"$0.00X","price_change_24h":"+XX%","volume_ratio":"XXx avg","market_cap":"$XXX","why_bullish":"2 sentences.","catalyst":"One sentence.","risk_level":"EXTREME","confidence":32},{"rank":5,"ticker":"X","company":"X","exchange":"OTC","current_price":"$0.00X","price_change_24h":"+XX%","volume_ratio":"XXx avg","market_cap":"$XXX","why_bullish":"2 sentences.","catalyst":"One sentence.","risk_level":"EXTREME","confidence":28}]}`;
+
+  try {
+    const raw  = await toJSON(prompt);
+    const data = extractJSON(raw);
+    renderPennyResults(data, maxPrice);
+  } catch(e) {
+    results.innerHTML = `<div style="padding:14px;color:var(--red);font-size:12px;">⚠️ ${e.message}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Scan Now'; }
+  }
+}
+
+function renderPennyResults(data, maxPrice) {
+  const results = document.getElementById('pennyResults');
+  if (!results) return;
+
+  const cards = (data.stocks||[]).map(s => {
+    const isPos = (s.price_change_24h||'').startsWith('+');
+    const chgCol = isPos ? 'var(--green)' : 'var(--red)';
+    const confCol = s.confidence >= 45 ? 'var(--yellow)' : s.confidence >= 35 ? 'var(--orange)' : '#ef4444';
+    const exchBg = s.exchange === 'NASDAQ' ? 'rgba(77,168,255,.1)' : s.exchange === 'NYSE' ? 'rgba(0,229,160,.1)' : 'rgba(220,38,38,.1)';
+    const exchCol = s.exchange === 'NASDAQ' ? 'var(--blue)' : s.exchange === 'NYSE' ? 'var(--green)' : '#ef4444';
+
+    return `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--b1);">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">
+        <div style="flex:1;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap;">
+            <span onclick="document.getElementById('tickerInput').value='${s.ticker}';runAnalysis('${s.ticker}')"
+              style="font-family:var(--mono);font-size:15px;font-weight:700;color:#f97316;cursor:pointer;">${s.ticker}</span>
+            <span style="font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;">${s.company}</span>
+            <span style="padding:2px 7px;border-radius:20px;font-family:var(--mono);font-size:9px;background:${exchBg};color:${exchCol};">${s.exchange}</span>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+            <span style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">${s.current_price}</span>
+            <span style="font-family:var(--mono);font-size:11px;color:${chgCol};">${s.price_change_24h} 24h</span>
+            <span style="font-size:10px;color:var(--t3);">Vol: <b style="color:var(--t2);">${s.volume_ratio}</b></span>
+            <span style="font-size:10px;color:var(--t3);">MCap: <b style="color:var(--t2);">${s.market_cap}</b></span>
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:8px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);">CONFIDENCE</div>
+          <div style="font-family:var(--mono);font-size:16px;font-weight:700;color:${confCol};">${s.confidence}%</div>
+          <div style="font-size:9px;color:#ef4444;margin-top:2px;">⚠️ ${s.risk_level}</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--t2);line-height:1.5;margin-bottom:6px;">${s.why_bullish}</div>
+      <div style="font-size:10px;color:var(--t3);">🎯 Catalyst: ${s.catalyst}</div>
+      <div style="margin-top:8px;">
+        <div style="height:3px;background:var(--b2);border-radius:2px;overflow:hidden;">
+          <div style="height:100%;width:${s.confidence}%;background:${confCol};border-radius:2px;"></div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  results.innerHTML = `
+    <div style="border-top:1px solid var(--b1);">
+      <div style="padding:10px 16px;background:var(--s2);display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;">${data.stocks?.length||0} stocks · Under $${maxPrice} · ${data.scanned_date}</span>
+        <span style="font-size:10px;color:#fbbf24;">⚠️ ${data.disclaimer}</span>
+      </div>
+      ${cards}
+    </div>`;
 }
 
 function sc2cls(s) {
