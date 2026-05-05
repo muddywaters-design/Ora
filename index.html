@@ -539,11 +539,9 @@ async function toJSON(prompt) {
 }
 
 // ── Ensemble Forecasting ──────────────────────────────────────
-// Runs 3 parallel Claude calls and averages confidence + direction
+// Runs 2 parallel Claude calls and averages (faster than 3)
 async function toJSONEnsemble(prompt) {
-  // Run 3 calls in parallel for ensemble
   const results = await Promise.allSettled([
-    toJSON(prompt),
     toJSON(prompt),
     toJSON(prompt),
   ]);
@@ -588,19 +586,28 @@ async function toJSONEnsemble(prompt) {
   }
 
   base._ensemble = true;
-  base._ensemble_models = parsed.length;
+  base._ensemble_models = 2;
   return JSON.stringify(base);
 }
 
 function extractJSON(raw) {
+  if (!raw || !raw.trim()) throw new Error('Empty response from API');
   const text = raw.replace(/```(?:json)?/gi, '').trim();
   let depth = 0, start = -1, end = -1;
   for (let i = 0; i < text.length; i++) {
     if (text[i] === '{') { if (!depth) start = i; depth++; }
     else if (text[i] === '}') { if (!--depth) { end = i; break; } }
   }
-  if (start < 0) throw new Error('No JSON in response');
-  return JSON.parse(text.slice(start, end + 1));
+  if (start < 0) throw new Error('No JSON in response. Raw: ' + text.slice(0,100));
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch(e) {
+    // Try to sanitize and retry
+    const sanitized = text.slice(start, end + 1)
+      .replace(/[ --]/g, ' ')
+      .replace(/,\s*([}\]])/g, '$1');
+    return JSON.parse(sanitized);
+  }
 }
 
 // ── Prompts ────────────────────────────────────────────────────
@@ -1127,16 +1134,16 @@ async function runAnalysis(sym) {
     '📊 Loading historical data & technicals…',
     '🔍 Analyzing RSI, MACD, Bollinger Bands…',
     '🏢 Checking sector & analyst data…',
-    '🧠 Running Model 1 / 3…',
-    '🧠 Running Model 2 / 3…',
-    '🧠 Running Model 3 / 3…',
+    '🧠 Running Model 1 / 2…',
+    '🧠 Running Model 2 / 2…',
+    
     '🔀 Merging ensemble results…',
   ];
   showAnalyzeLoading(t, steps);
 
   // Realistic step timing — market data first, then Claude calls
   let stepIdx = 0;
-  const stepTimes = [800, 1200, 1400, 2000, 4000, 4000, 4000, 1000];
+  const stepTimes = [800, 1200, 1400, 2000, 5000, 5000, 1000];
   let cumulativeDelay = 0;
   const stepTimers = stepTimes.map((delay, i) => {
     cumulativeDelay += delay;
@@ -1269,14 +1276,14 @@ function showAnalyzeLoading(ticker, steps) {
     <div class="loading">
       <div class="loading-sym">${ticker}</div>
       <div style="font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:-8px;margin-bottom:4px;">
-        🔀 3-Model Ensemble &nbsp;·&nbsp; <span id="elapsedTimer">0s</span>
+        🔀 2-Model Ensemble &nbsp;·&nbsp; <span id="elapsedTimer">0s</span>
       </div>
       <div class="lbar"><div class="lfill"></div></div>
       <div class="lsteps">
         ${steps.map((s, i) => `<div class="lstep-item${i===0?' lstep-act':''}">${i===0?'▶ '+s:'  '+s}</div>`).join('')}
       </div>
       <div style="font-size:10px;color:var(--t3);margin-top:10px;text-align:center;line-height:1.6;">
-        Ensemble analysis takes ~20-30s for maximum accuracy
+        Ensemble analysis takes ~15-20s for maximum accuracy
       </div>
     </div>`;
   const start = Date.now();
@@ -1471,17 +1478,23 @@ async function runAllAccuracy() {
     if (el) el.textContent = msg;
   };
 
-  // Check each stock one by one
+  // Fetch all prices in parallel (much faster)
+  setStatus(`Fetching all ${watchlist.length} prices in parallel…`);
+  const priceMap = {};
+  await Promise.allSettled(
+    watchlist.map(entry => fetchLivePrice(entry.ticker).then(live => { priceMap[entry.ticker] = live; }))
+  );
+
+  // Process results
   for (let i = 0; i < watchlist.length; i++) {
     const entry = watchlist[i];
-    setStatus(`Checking ${entry.ticker} (${i+1}/${watchlist.length})…`);
+    setStatus(`Processing ${entry.ticker} (${i+1}/${watchlist.length})…`);
 
     try {
       const forecastPrice = parseFloat((entry.data?.current_price||'').replace(/[^0-9.]/g,'')) || null;
       const forecasts = entry.data?.forecasts || {};
 
-      // Fetch real current price
-      const liveData = await fetchLivePrice(entry.ticker);
+      const liveData = priceMap[entry.ticker];
       const currentPrice = liveData ? parseFloat(liveData.price) : null;
 
       let actualChangePct = null;
@@ -1536,8 +1549,7 @@ async function runAllAccuracy() {
       });
     }
 
-    // Small delay to avoid rate limiting
-    if (i < watchlist.length - 1) await new Promise(r => setTimeout(r, 500));
+    // No delay needed — prices already fetched in parallel
   }
 
   renderAccDashboard(results);
@@ -2606,16 +2618,17 @@ async function refreshPortfolio() {
   const btn = document.getElementById('refreshPortfolioBtn');
   if (btn) { btn.textContent = '⏳ Updating…'; btn.disabled = true; }
 
-  for (const pos of portfolio.positions) {
-    try {
-      const live = await fetchLivePrice(pos.ticker);
-      if (live?.price) {
-        pos.currentPrice = parseFloat(live.price);
-        pos.lastUpdated = new Date().toISOString();
-      }
-    } catch(_) {}
-    await new Promise(r => setTimeout(r, 400));
-  }
+  // Fetch all portfolio prices in parallel
+  await Promise.allSettled(
+    portfolio.positions.map(pos =>
+      fetchLivePrice(pos.ticker).then(live => {
+        if (live?.price) {
+          pos.currentPrice = parseFloat(live.price);
+          pos.lastUpdated = new Date().toISOString();
+        }
+      }).catch(() => {})
+    )
+  );
   savePortfolio();
   renderPortfolio();
   if (btn) { btn.textContent = '↻ Refresh Prices'; btn.disabled = false; }
