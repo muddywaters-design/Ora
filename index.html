@@ -517,6 +517,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
+    system: 'You are StockOracle, an elite quantitative analyst combining technical analysis, fundamental research, and market microstructure. Your forecasts are data-driven, specific, and calibrated. You always output valid JSON when asked. You think step by step: (1) evaluate technical signals, (2) assess fundamentals, (3) consider market microstructure (short interest, options flow, institutional positioning), (4) apply macro overlay, (5) identify catalysts, (6) synthesize into probability-weighted forecasts. Confidence >75% only when 4+ signals agree. Always provide bull and bear scenarios.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -630,6 +631,12 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData) {
   const insiderCtx = insiderData ? `InsiderActivity:${insiderData.net}(${insiderData.buys}buys,${insiderData.sells}sells in 90d).` : '';
   const trendsCtx  = trendsData  ? `GoogleTrends:${trendsData.signal},${trendsData.trend_change}%change.` : '';
   const fg = fgData ? `Fear&Greed: ${fgData.score}/100 (${fgData.rating}).` : '';
+  const shortCtx   = shortData?.shortPct && shortData.shortPct!=='—'
+    ? `ShortInterest:${shortData.shortPct}(${shortData.shortRatio}toCover),${shortData.squeezeScore}.Inst:${shortData.instPct}(${shortData.instTrend}).`
+    : '';
+  const optFlowCtx = optionsData?.flowBias && optionsData.flowBias!=='—'
+    ? `OptionsFlow:${optionsData.flowBias},P/C:${optionsData.pcRatio},${optionsData.unusualSignal}.`
+    : '';
   const breakoutCtx = (() => {
     if (!liveData?.price || !liveData?.high52 || !liveData?.low52) return '';
     const p=parseFloat(liveData.price), h=parseFloat(liveData.high52), l=parseFloat(liveData.low52);
@@ -640,9 +647,9 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData) {
     if (parseFloat(pL)<6) return `Near52WLow(+${pL}%fromLow).`;
     return '';
   })();
-  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx}
+  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx}
 Reply with ONLY JSON (no markdown):
-{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
+{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
 
 function mkResearchPrompt(ticker) { return mkSinglePrompt(ticker, null); }
@@ -652,12 +659,109 @@ function mkJSONPrompt(ticker, research) {
 
 ${research.slice(0, 1500)}
 
-{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"Short reason."},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"Short reason."},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"Short reason."},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"Short reason."}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
+{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"Technical basis.","bull_case":"If X happens.","bear_case":"Risk if Y.","key_level":"$X support/resistance"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"Fundamental basis.","bull_case":"If X.","bear_case":"Risk.","key_level":"$X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"Macro basis.","bull_case":"If X.","bear_case":"Risk.","key_level":"$X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"Thesis.","bull_case":"If X.","bear_case":"Risk.","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
 }
 
 
 
 
+
+// ── Short Interest & Institutional Data (FINRA/Yahoo) ────────
+async function fetchShortInterest(ticker) {
+  try {
+    const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=defaultKeyStatistics,institutionOwnership`;
+    const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
+    for (const proxy of proxies) {
+      try {
+        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(7000)});
+        if (!r.ok) continue;
+        const data = await r.json();
+        const stats = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
+        const inst  = data?.quoteSummary?.result?.[0]?.institutionOwnership;
+        if (!stats) continue;
+
+        const shortPct    = stats.shortPercentOfFloat?.raw;
+        const shortRatio  = stats.shortRatio?.raw; // days to cover
+        const instPct     = stats.heldPercentInstitutions?.raw;
+        const insiderPct  = stats.heldPercentInsiders?.raw;
+        const beta        = stats.beta?.raw;
+        const floatShares = stats.floatShares?.raw;
+
+        // Top institutional holders trend
+        let instTrend = '—';
+        const holders = inst?.ownershipList || [];
+        if (holders.length > 0) {
+          const buying  = holders.filter(h => (h.value?.raw || 0) > 0).length;
+          const selling = holders.filter(h => (h.value?.raw || 0) < 0).length;
+          instTrend = buying > selling ? `${buying} inst buying` : selling > buying ? `${selling} inst selling` : 'Mixed';
+        }
+
+        return {
+          shortPct:    shortPct   ? (shortPct * 100).toFixed(1) + '%'   : '—',
+          shortRatio:  shortRatio ? shortRatio.toFixed(1) + 'd'         : '—',
+          instPct:     instPct    ? (instPct  * 100).toFixed(1) + '%'   : '—',
+          insiderPct:  insiderPct ? (insiderPct*100).toFixed(1) + '%'   : '—',
+          instTrend,
+          squeezeScore: shortPct && shortRatio
+            ? (shortPct > 0.2 && shortRatio > 5 ? 'High squeeze potential' :
+               shortPct > 0.1 ? 'Moderate short interest' : 'Low short interest')
+            : '—',
+        };
+      } catch(_) {}
+    }
+  } catch(_) {}
+  return null;
+}
+
+// ── Options Unusual Activity ───────────────────────────────────
+async function fetchOptionsFlow(ticker) {
+  try {
+    const url = `https://query2.finance.yahoo.com/v7/finance/options/${ticker}`;
+    const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
+    for (const proxy of proxies) {
+      try {
+        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(7000)});
+        if (!r.ok) continue;
+        const data = await r.json();
+        const chain = data?.optionChain?.result?.[0];
+        if (!chain) continue;
+
+        const calls = chain.options?.[0]?.calls || [];
+        const puts  = chain.options?.[0]?.puts  || [];
+        if (!calls.length && !puts.length) continue;
+
+        // Find unusual activity: volume > openInterest * 0.5 AND volume > 100
+        const unusualCalls = calls.filter(o => o.volume > 100 && o.volume > (o.openInterest||1) * 0.5);
+        const unusualPuts  = puts.filter(o  => o.volume > 100 && o.volume > (o.openInterest||1) * 0.5);
+
+        const totalCallVol = calls.reduce((a,o) => a + (o.volume||0), 0);
+        const totalPutVol  = puts.reduce((a,o)  => a + (o.volume||0), 0);
+        const pcRatio      = totalPutVol > 0 ? (totalPutVol/totalCallVol).toFixed(2) : '—';
+
+        // Most unusual single option
+        const topCall = unusualCalls.sort((a,b)=>b.volume-a.volume)[0];
+        const topPut  = unusualPuts.sort((a,b)=>b.volume-a.volume)[0];
+
+        let unusualSignal = 'No unusual activity';
+        if (topCall && topCall.volume > (topPut?.volume||0)) {
+          unusualSignal = `Unusual CALL activity: $${topCall.strike} strike, ${topCall.volume.toLocaleString()} vol`;
+        } else if (topPut) {
+          unusualSignal = `Unusual PUT activity: $${topPut.strike} strike, ${topPut.volume.toLocaleString()} vol`;
+        }
+
+        return {
+          pcRatio,
+          unusualCalls: unusualCalls.length,
+          unusualPuts:  unusualPuts.length,
+          unusualSignal,
+          flowBias: parseFloat(pcRatio) > 1.2 ? 'Bearish options flow' :
+                    parseFloat(pcRatio) < 0.7 ? 'Bullish options flow' : 'Neutral options flow',
+        };
+      } catch(_) {}
+    }
+  } catch(_) {}
+  return null;
+}
 
 // ── Currency Exchange Rate ────────────────────────────────────
 async function fetchExchangeRate(from, to) {
@@ -1161,10 +1265,12 @@ async function runAnalysis(sym) {
 
   try {
     // Fetch all data sources in parallel for speed
-    const [liveData, insiderData, trendsData] = await Promise.allSettled([
+    const [liveData, insiderData, trendsData, shortData, optionsData] = await Promise.allSettled([
       fetchLivePrice(t),
       fetchInsiderTrading(t),
       fetchGoogleTrends(t),
+      fetchShortInterest(t),
+      fetchOptionsFlow(t),
     ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : null));
     // Mark data fetch step as done
     if(window._advanceStep) window._advanceStep();
@@ -1300,6 +1406,18 @@ async function runAnalysis(sym) {
       parsed.live_dividend       = liveData.dividendYield;
       parsed.live_dividend_label = liveData.dividendLabel;
     }
+    if (shortData) {
+      parsed.live_short_pct     = shortData.shortPct;
+      parsed.live_short_ratio   = shortData.shortRatio;
+      parsed.live_squeeze       = shortData.squeezeScore;
+      parsed.live_inst_pct      = shortData.instPct;
+      parsed.live_inst_trend    = shortData.instTrend;
+    }
+    if (optionsData) {
+      parsed.live_options_flow  = optionsData.flowBias;
+      parsed.live_options_pc    = optionsData.pcRatio;
+      parsed.live_unusual       = optionsData.unusualSignal;
+    }
     // Inject insider data
     if (insiderData) {
       parsed.live_insider_signal  = insiderData.signal;
@@ -1316,6 +1434,16 @@ async function runAnalysis(sym) {
     }
     // Auto-calibrate confidence based on data signal agreement
     calibrateConfidence(parsed, liveData);
+    // Apply historical accuracy calibration
+    ['week','month','half_year','year'].forEach(tf => {
+      if (parsed.forecasts?.[tf]?.confidence) {
+        const factor = getCalibrationFactor(tf);
+        parsed.forecasts[tf].confidence = Math.round(Math.min(90, Math.max(15, parsed.forecasts[tf].confidence * factor)));
+        if (factor !== 1.0) parsed.forecasts[tf].calibrated_by_history = true;
+      }
+    });
+    // Record this forecast for future calibration
+    if (liveData?.price) recordForecast(t, parsed.forecasts, parseFloat(liveData.price));
     currentResult = parsed;
     clearInterval(iv);
     clearInterval(window._elapsedInterval);
@@ -1380,6 +1508,15 @@ function renderAnalysis(ticker, d) {
       <div class="cbar"><div class="cfill" style="width:${f.confidence||0}%"></div></div>
       <div class="fc-cf"><span class="${fc}">${f.signal||'NEUTRAL'}</span><span style="color:var(--t3)">${f.confidence||0}% conf</span></div>
       ${f.ensemble_agreement ? `<div style="font-family:var(--mono);font-size:8px;color:var(--blue);margin-top:4px;">🔀 ${f.ensemble_agreement}</div>` : ''}
+      ${f.bull_case ? `<div style="margin-top:6px;padding:6px 8px;background:rgba(0,229,160,.06);border-radius:6px;border-left:2px solid var(--green);">
+        <div style="font-size:9px;color:var(--green);font-family:var(--mono);margin-bottom:2px;">▲ BULL</div>
+        <div style="font-size:10px;color:var(--t2);">${f.bull_case}</div>
+      </div>` : ''}
+      ${f.bear_case ? `<div style="margin-top:4px;padding:6px 8px;background:rgba(255,68,102,.06);border-radius:6px;border-left:2px solid var(--red);">
+        <div style="font-size:9px;color:var(--red);font-family:var(--mono);margin-bottom:2px;">▼ BEAR</div>
+        <div style="font-size:10px;color:var(--t2);">${f.bear_case}</div>
+      </div>` : ''}
+      ${f.key_level ? `<div style="font-size:9px;color:var(--t3);margin-top:4px;">🎯 Key level: <b style="color:var(--yellow)">${f.key_level}</b></div>` : ''}
       ${f.reasoning?`<div class="fc-rs">${f.reasoning}</div>`:''}
     </div>`;
   }).join('');
@@ -1456,10 +1593,13 @@ function renderAnalysis(ticker, d) {
           ${d.live_dividend && d.live_dividend!=='—' ? `<span style="font-size:10px;color:var(--t3);">Div: <b style="color:var(--blue)">${d.live_dividend}</b></span>` : ''}
         </div>`;
       }
-      if (d.live_insider_net || d.live_trends_signal) {
+      if (d.live_insider_net || d.live_trends_signal || d.live_short_pct || d.live_options_flow) {
         html += `<div style="display:flex;flex-wrap:wrap;gap:14px;padding-top:6px;margin-top:2px;">
           ${d.live_insider_net ? `<span style="font-size:10px;color:var(--t3);">Insider: <b style="color:${d.live_insider_net.includes('Buying')?'var(--green)':d.live_insider_net.includes('Selling')?'var(--red)':'var(--t1)'}">${d.live_insider_net}</b> (${d.live_insider_buys}B/${d.live_insider_sells}S · 90d)</span>` : ''}
-          ${d.live_trends_signal ? `<span style="font-size:10px;color:var(--t3);">Google Trends: <b style="color:${d.live_trends_signal.includes('Surging')||d.live_trends_signal.includes('Rising')?'var(--green)':d.live_trends_signal.includes('Declining')?'var(--red)':'var(--t1)'}">${d.live_trends_signal}</b> (${d.live_trends_change}%)</span>` : ''}
+          ${d.live_trends_signal ? `<span style="font-size:10px;color:var(--t3);">Trends: <b style="color:${d.live_trends_signal.includes('Surging')||d.live_trends_signal.includes('Rising')?'var(--green)':'var(--t1)'}">${d.live_trends_signal}</b></span>` : ''}
+          ${d.live_short_pct && d.live_short_pct!=='—' ? `<span style="font-size:10px;color:var(--t3);">Short: <b style="color:${parseFloat(d.live_short_pct)>20?'var(--red)':parseFloat(d.live_short_pct)>10?'var(--yellow)':'var(--t1)'}">${d.live_short_pct}</b> (${d.live_short_ratio} to cover) · ${d.live_squeeze}</span>` : ''}
+          ${d.live_options_flow && d.live_options_flow!=='—' ? `<span style="font-size:10px;color:var(--t3);">Options: <b style="color:${d.live_options_flow.includes('Bullish')?'var(--green)':d.live_options_flow.includes('Bearish')?'var(--red)':'var(--t1)'}">${d.live_options_flow}</b></span>` : ''}
+          ${d.live_inst_pct && d.live_inst_pct!=='—' ? `<span style="font-size:10px;color:var(--t3);">Inst: <b style="color:var(--t2)">${d.live_inst_pct}</b> (${d.live_inst_trend})</span>` : ''}
         </div>`;
       }
       html += '</div>';
@@ -1468,6 +1608,18 @@ function renderAnalysis(ticker, d) {
 
 
 
+    ${d.primary_driver ? `<div style="padding:10px 16px;border:1px solid var(--b1);border-radius:10px;background:rgba(77,168,255,.04);margin-top:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div style="flex:1;">
+          <div style="font-size:9px;color:var(--blue);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px;">⚡ Primary Driver</div>
+          <div style="font-size:12px;color:var(--t1);line-height:1.5;">${d.primary_driver}</div>
+        </div>
+        ${d.stop_loss ? `<div style="text-align:right;flex-shrink:0;">
+          <div style="font-size:9px;color:var(--red);font-family:var(--mono);text-transform:uppercase;margin-bottom:3px;">⛔ Stop Loss</div>
+          <div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--red);">${d.stop_loss}</div>
+        </div>` : ''}
+      </div>
+    </div>` : ''}
     <div class="src-bar">
       <span class="src-lbl">Sources</span>
       ${srcHTML}
@@ -2398,6 +2550,38 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
 }
 
 // ── Portfolio ──────────────────────────────────────────────────
+// ── Accuracy Calibration System ──────────────────────────────
+let forecastHistory = JSON.parse(localStorage.getItem('so_forecast_history') || '[]');
+
+function recordForecast(ticker, forecasts, livePrice) {
+  const record = {
+    id: Date.now(),
+    ticker,
+    date: new Date().toISOString(),
+    price_at_forecast: livePrice,
+    forecasts: {
+      week:      { direction: forecasts.week?.direction,      confidence: forecasts.week?.confidence      },
+      month:     { direction: forecasts.month?.direction,     confidence: forecasts.month?.confidence     },
+      half_year: { direction: forecasts.half_year?.direction, confidence: forecasts.half_year?.confidence },
+      year:      { direction: forecasts.year?.direction,      confidence: forecasts.year?.confidence      },
+    },
+    outcomes: {}, // filled in when checking accuracy
+  };
+  forecastHistory.unshift(record);
+  if (forecastHistory.length > 100) forecastHistory = forecastHistory.slice(0, 100); // keep last 100
+  localStorage.setItem('so_forecast_history', JSON.stringify(forecastHistory));
+}
+
+function getCalibrationFactor(timeframe) {
+  // Calculate historical accuracy for this timeframe to adjust confidence
+  const relevant = forecastHistory.filter(r => r.outcomes[timeframe]?.verdict);
+  if (relevant.length < 5) return 1.0; // not enough data
+  const hits = relevant.filter(r => r.outcomes[timeframe].verdict === 'HIT').length;
+  const accuracy = hits / relevant.length;
+  // If accuracy < 50%, reduce confidence; if > 70%, boost slightly
+  return accuracy < 0.5 ? 0.85 : accuracy > 0.7 ? 1.1 : 1.0;
+}
+
 let portfolio = JSON.parse(localStorage.getItem('so_portfolio') || '{"budget":10000,"positions":[]}');
 // Deduplicate positions by id (fix any existing duplicates)
 portfolio.positions = portfolio.positions.filter((p,i,arr) => arr.findIndex(x=>x.id===p.id)===i);
