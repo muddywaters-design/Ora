@@ -546,8 +546,8 @@ async function toJSON(prompt) {
 // ── Ensemble Forecasting ──────────────────────────────────────
 // Runs 2 parallel Claude calls and averages (faster than 3)
 async function toJSONEnsemble(prompt) {
+  // Single call for speed
   const results = await Promise.allSettled([
-    toJSON(prompt),
     toJSON(prompt),
   ]);
 
@@ -1135,29 +1135,29 @@ async function runAnalysis(sym) {
   document.getElementById('liveLabel').textContent = 'FETCHING…';
 
   const steps = [
-    '📡 Fetching live price & exchange rate…',
-    '📊 Loading historical data & technicals…',
-    '🔍 Analyzing RSI, MACD, Bollinger Bands…',
+    '📡 Fetching live market data…',
+    '📊 Processing technicals…',
     '🏢 Checking sector & analyst data…',
-    '🧠 Running Model 1 / 2…',
-    '🧠 Running Model 2 / 2…',
-    
-    '🔀 Merging ensemble results…',
+    '🧠 Running AI forecast model…',
+    '✅ Building forecast report…',
   ];
   showAnalyzeLoading(t, steps);
 
-  // Simple interval-based progress — 1 step every 4 seconds
+  // Event-driven step progress
   let stepIdx = 0;
-  const els0 = document.querySelectorAll('.lstep-item');
-  if (els0[0]) els0[0].className = 'lstep-act';
-  const iv = setInterval(() => {
+  const advanceStep = () => {
     const els = document.querySelectorAll('.lstep-item');
     if (stepIdx < els.length) {
-      if (els[stepIdx]) { els[stepIdx].className = 'lstep-done'; els[stepIdx].textContent = '✓ ' + steps[stepIdx].replace(/^\S+ /, ''); }
+      if (els[stepIdx]) { els[stepIdx].className = 'lstep-done'; els[stepIdx].textContent = '✓ ' + (steps[stepIdx]||'').replace(/^\S+ /, ''); }
       stepIdx++;
       if (stepIdx < els.length && els[stepIdx]) els[stepIdx].className = 'lstep-act';
     }
-  }, 4000);
+  };
+  window._advanceStep = advanceStep;
+  const els0 = document.querySelectorAll('.lstep-item');
+  if (els0[0]) els0[0].className = 'lstep-act';
+  // Fallback interval in case events don't fire
+  const iv = setInterval(() => { if (stepIdx < 4) advanceStep(); }, 8000);
 
   try {
     // Fetch all data sources in parallel for speed
@@ -1166,10 +1166,8 @@ async function runAnalysis(sym) {
       fetchInsiderTrading(t),
       fetchGoogleTrends(t),
     ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : null));
-    // Mark data fetch complete
-    const els2 = document.querySelectorAll('.lstep-item');
-    [0,1,2,3].forEach(i => { if(els2[i]) { els2[i].className='lstep-done'; } });
-    if(els2[4]) els2[4].className='lstep-act';
+    // Mark data fetch step as done
+    if(window._advanceStep) window._advanceStep();
     const fgData = null;
     if (!liveData) {
       // Retry once with a different proxy before showing warning
@@ -1202,12 +1200,42 @@ async function runAnalysis(sym) {
         }
       } catch(_) {}
     }
-    // Only show warning if still no data after retry
+    // Try OTC format (ticker.PK or ticker.OB) for penny stocks
+    if (!liveData) {
+      for (const suffix of ['.PK', '.OB', '']) {
+        try {
+          const otcUrl = 'https://query2.finance.yahoo.com/v8/finance/chart/' + t + suffix + '?interval=1d&range=5d';
+          for (const proxy of ['https://corsproxy.io/?', 'https://api.allorigins.win/raw?url=']) {
+            try {
+              const ro = await fetch(proxy + encodeURIComponent(otcUrl), {signal: AbortSignal.timeout(7000)});
+              if (!ro.ok) continue;
+              const doo = await ro.json();
+              const mo = doo?.chart?.result?.[0]?.meta;
+              if (mo?.regularMarketPrice) {
+                liveData = {
+                  price: mo.regularMarketPrice.toFixed(4),
+                  change: (mo.regularMarketPrice - (mo.chartPreviousClose||mo.regularMarketPrice)).toFixed(4),
+                  changePct: (((mo.regularMarketPrice-(mo.chartPreviousClose||mo.regularMarketPrice))/(mo.chartPreviousClose||mo.regularMarketPrice))*100).toFixed(2),
+                  high52: mo.fiftyTwoWeekHigh?.toFixed(4)||'—', low52: mo.fiftyTwoWeekLow?.toFixed(4)||'—',
+                  marketCap: mo.marketCap ? formatMarketCap(mo.marketCap) : '—',
+                  volume: mo.regularMarketVolume?.toLocaleString()||'—',
+                  currency:'USD', rsi:'—', macd:'—', macdSignal:'—',
+                  bb_upper:'—', bb_lower:'—', bb_mid:'—', putCallRatio:'—',
+                  source: 'Yahoo Finance (OTC)',
+                };
+                break;
+              }
+            } catch(_) {}
+          }
+          if (liveData) break;
+        } catch(_) {}
+      }
+    }
     if (!liveData) {
       const warn = document.createElement('div');
       warn.id = 'live-warn';
       warn.style.cssText = 'background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.2);border-radius:8px;padding:10px 14px;margin:8px 20px;font-size:11px;color:var(--yellow);text-align:center;';
-      warn.innerHTML = '⚠️ Could not fetch live price — analysis will use AI estimates only.';
+      warn.innerHTML = '⚠️ Live price unavailable for this ticker — AI analysis only.';
       const loading = document.querySelector('.loading');
       if (loading) loading.appendChild(warn);
     }
@@ -1311,7 +1339,7 @@ function showAnalyzeLoading(ticker, steps) {
     <div class="loading">
       <div class="loading-sym">${ticker}</div>
       <div style="font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:-8px;margin-bottom:4px;">
-        🔀 2-Model Ensemble &nbsp;·&nbsp; <span id="elapsedTimer">0s</span>
+        🧠 AI Analysis &nbsp;·&nbsp; <span id="elapsedTimer">0s</span>
       </div>
       <div class="lbar"><div class="lfill"></div></div>
       <div class="lsteps">
