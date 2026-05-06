@@ -617,7 +617,7 @@ function extractJSON(raw) {
 }
 
 // ── Prompts ────────────────────────────────────────────────────
-function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData) {
+function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, shortData, optionsData) {
   const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const price = liveData?.price ? `Current price: $${liveData.price} (${liveData.change>=0?'+':''}${liveData.change}, ${liveData.changePct}%). 52W: $${liveData.low52}-$${liveData.high52}. Vol: ${liveData.volume}. MCap: ${liveData.marketCap}. PE: ${liveData.pe}. Target: ${liveData.targetPrice}.` : '';
   const techs = liveData?.rsi && liveData.rsi!=='—' ? `RSI(14):${liveData.rsi} MACD:${liveData.macd} Signal:${liveData.macdSignal} BB:${liveData.bb_lower}-${liveData.bb_mid}-${liveData.bb_upper} Put/Call:${liveData.putCallRatio}.` : '';
@@ -1345,7 +1345,7 @@ async function runAnalysis(sym) {
       const loading = document.querySelector('.loading');
       if (loading) loading.appendChild(warn);
     }
-    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData));
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData));
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
     // Always inject live price if we got it
