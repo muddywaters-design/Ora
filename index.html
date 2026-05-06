@@ -673,7 +673,7 @@ async function fetchShortInterest(ticker) {
     const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
     for (const proxy of proxies) {
       try {
-        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(7000)});
+        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(4000)});
         if (!r.ok) continue;
         const data = await r.json();
         const stats = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
@@ -720,7 +720,7 @@ async function fetchOptionsFlow(ticker) {
     const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
     for (const proxy of proxies) {
       try {
-        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(7000)});
+        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(4000)});
         if (!r.ok) continue;
         const data = await r.json();
         const chain = data?.optionChain?.result?.[0];
@@ -771,7 +771,7 @@ async function fetchExchangeRate(from, to) {
   const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url=','https://api.codetabs.com/v1/proxy?quest='];
   for (const proxy of proxies) {
     try {
-      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(7000)});
+      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(4000)});
       if (!r.ok) continue;
       const data = await r.json();
       const rate = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
@@ -802,7 +802,7 @@ async function fetchLivePrice(ticker) {
       // Try quote endpoint first for real-time price
       let price, prev, change, changePct, high52, low52, marketCap, volume;
       try {
-        const rq = await fetch(proxy + encodeURIComponent(quoteUrl), {signal: AbortSignal.timeout(7000), headers:{'User-Agent':'Mozilla/5.0'}});
+        const rq = await fetch(proxy + encodeURIComponent(quoteUrl), {signal: AbortSignal.timeout(4000), headers:{'User-Agent':'Mozilla/5.0'}});
         if (rq.ok) {
           const dq = await rq.json();
           const q  = dq?.quoteResponse?.result?.[0];
@@ -822,7 +822,7 @@ async function fetchLivePrice(ticker) {
       // Fallback: chart endpoint with meta
       if (!price) {
         const fallbackUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d&includePrePost=false`;
-        const rf = await fetch(proxy + encodeURIComponent(fallbackUrl), {signal: AbortSignal.timeout(9000), headers:{'User-Agent':'Mozilla/5.0'}});
+        const rf = await fetch(proxy + encodeURIComponent(fallbackUrl), {signal: AbortSignal.timeout(5000), headers:{'User-Agent':'Mozilla/5.0'}});
         if (!rf.ok) continue;
         const df   = await rf.json();
         const meta = df?.chart?.result?.[0]?.meta;
@@ -841,7 +841,7 @@ async function fetchLivePrice(ticker) {
       let pe='—', eps='—', targetPrice='—', numAnalysts='—';
       try {
         const url2 = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=financialData,defaultKeyStatistics`;
-        const r2 = await fetch(proxy + encodeURIComponent(url2), {signal: AbortSignal.timeout(7000)});
+        const r2 = await fetch(proxy + encodeURIComponent(url2), {signal: AbortSignal.timeout(4000)});
         if (r2.ok) {
           const d2 = await r2.json();
           const res = d2?.quoteSummary?.result?.[0];
@@ -871,7 +871,7 @@ async function fetchLivePrice(ticker) {
       // Fetch options Put/Call ratio
       try {
         const url4 = `https://query1.finance.yahoo.com/v7/finance/options/${ticker}`;
-        const r4 = await fetch(proxy + encodeURIComponent(url4), {signal: AbortSignal.timeout(8000)});
+        const r4 = await fetch(proxy + encodeURIComponent(url4), {signal: AbortSignal.timeout(4000)});
         if (r4.ok) {
           const d4 = await r4.json();
           const chain = d4?.optionChain?.result?.[0];
@@ -899,7 +899,7 @@ async function fetchLivePrice(ticker) {
       let earningsSurprise = '—', earningsTrend = '—', nextEarnings = '—';
       try {
         const url5 = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=earningsHistory,calendarEvents,earningsTrend`;
-        const r5 = await fetch(proxy + encodeURIComponent(url5), {signal: AbortSignal.timeout(7000)});
+        const r5 = await fetch(proxy + encodeURIComponent(url5), {signal: AbortSignal.timeout(4000)});
         if (r5.ok) {
           const d5 = await r5.json();
           const res5 = d5?.quoteSummary?.result?.[0];
@@ -971,7 +971,7 @@ async function fetchLivePrice(ticker) {
       let sectorChange = '—', sectorRelative = '—', sectorRelativeLabel = '—';
       try {
         const etfUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${sectorETF}?interval=1d&range=1mo`;
-        const etfR = await fetch(proxy + encodeURIComponent(etfUrl), {signal: AbortSignal.timeout(7000)});
+        const etfR = await fetch(proxy + encodeURIComponent(etfUrl), {signal: AbortSignal.timeout(4000)});
         if (etfR.ok) {
           const etfData = await etfR.json();
           const etfMeta = etfData?.chart?.result?.[0]?.meta;
@@ -995,7 +995,7 @@ async function fetchLivePrice(ticker) {
       let analystRevision = '—', analystRevisionLabel = '—';
       try {
         const url6 = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=recommendationTrend,upgradeDowngradeHistory`;
-        const r6 = await fetch(proxy + encodeURIComponent(url6), {signal: AbortSignal.timeout(7000)});
+        const r6 = await fetch(proxy + encodeURIComponent(url6), {signal: AbortSignal.timeout(4000)});
         if (r6.ok) {
           const d6 = await r6.json();
           const res6 = d6?.quoteSummary?.result?.[0];
@@ -1025,7 +1025,7 @@ async function fetchLivePrice(ticker) {
         // Use existing closes data + fetch SPY closes for same period
         const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [];
         const spyUrl = `https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=3mo`;
-        const spyR = await fetch(proxy + encodeURIComponent(spyUrl), {signal: AbortSignal.timeout(7000)});
+        const spyR = await fetch(proxy + encodeURIComponent(spyUrl), {signal: AbortSignal.timeout(4000)});
         if (spyR.ok && closes.length >= 20) {
           const spyData = await spyR.json();
           const spyCloses = spyData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [];
@@ -1096,7 +1096,7 @@ async function fetchInsiderTrading(ticker) {
     const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
     for (const proxy of proxies) {
       try {
-        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(8000)});
+        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(4000)});
         if (!r.ok) continue;
         const data = await r.json();
         const hits = data?.hits?.hits || [];
@@ -1141,7 +1141,7 @@ async function fetchGoogleTrends(ticker) {
     const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
     for (const proxy of proxies) {
       try {
-        const r = await fetch(proxy + encodeURIComponent(trendsUrl), {signal: AbortSignal.timeout(8000)});
+        const r = await fetch(proxy + encodeURIComponent(trendsUrl), {signal: AbortSignal.timeout(4000)});
         if (!r.ok) continue;
         const text = await r.text();
         // Google Trends prepends )]}' to prevent XSSI
@@ -1261,19 +1261,22 @@ async function runAnalysis(sym) {
   const els0 = document.querySelectorAll('.lstep-item');
   if (els0[0]) els0[0].className = 'lstep-act';
   // Fallback interval in case events don't fire
-  const iv = setInterval(() => { if (stepIdx < 4) advanceStep(); }, 8000);
+  const iv = setInterval(() => { if (stepIdx < steps.length) advanceStep(); }, 10000);
 
   try {
-    // Fetch all data sources in parallel for speed
-    const [liveData, insiderData, trendsData, shortData, optionsData] = await Promise.allSettled([
-      fetchLivePrice(t),
-      fetchInsiderTrading(t),
-      fetchGoogleTrends(t),
-      fetchShortInterest(t),
-      fetchOptionsFlow(t),
-    ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : null));
-    // Mark data fetch step as done
-    if(window._advanceStep) window._advanceStep();
+    // Fetch all data sources in parallel with hard 6s cap
+    const withTimeout = (promise, ms=6000) =>
+      Promise.race([promise, new Promise(r => setTimeout(() => r(null), ms))]);
+
+    const [liveData, insiderData, trendsData, shortData, optionsData] = await Promise.all([
+      withTimeout(fetchLivePrice(t),      6000),
+      withTimeout(fetchInsiderTrading(t), 4000),
+      withTimeout(fetchGoogleTrends(t),   4000),
+      withTimeout(fetchShortInterest(t),  4000),
+      withTimeout(fetchOptionsFlow(t),    4000),
+    ]);
+    // Steps 1+2 done after data fetch
+    if(window._advanceStep) { window._advanceStep(); window._advanceStep(); }
     const fgData = null;
     if (!liveData) {
       // Retry once with a different proxy before showing warning
@@ -1282,7 +1285,7 @@ async function runAnalysis(sym) {
         const retryProxies = ['https://corsproxy.io/?', 'https://api.allorigins.win/raw?url='];
         for (const proxy of retryProxies) {
           try {
-            const rr = await fetch(proxy + encodeURIComponent(retryUrl), {signal: AbortSignal.timeout(8000)});
+            const rr = await fetch(proxy + encodeURIComponent(retryUrl), {signal: AbortSignal.timeout(4000)});
             if (rr.ok) {
               const dd = await rr.json();
               const mm = dd?.chart?.result?.[0]?.meta;
@@ -1313,7 +1316,7 @@ async function runAnalysis(sym) {
           const otcUrl = 'https://query2.finance.yahoo.com/v8/finance/chart/' + t + suffix + '?interval=1d&range=5d';
           for (const proxy of ['https://corsproxy.io/?', 'https://api.allorigins.win/raw?url=']) {
             try {
-              const ro = await fetch(proxy + encodeURIComponent(otcUrl), {signal: AbortSignal.timeout(7000)});
+              const ro = await fetch(proxy + encodeURIComponent(otcUrl), {signal: AbortSignal.timeout(4000)});
               if (!ro.ok) continue;
               const doo = await ro.json();
               const mo = doo?.chart?.result?.[0]?.meta;
@@ -1345,7 +1348,9 @@ async function runAnalysis(sym) {
       const loading = document.querySelector('.loading');
       if (loading) loading.appendChild(warn);
     }
+    if(window._advanceStep) window._advanceStep(); // Step: Running AI
     const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData));
+    if(window._advanceStep) window._advanceStep(); // Step: Building report
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
     // Always inject live price if we got it
@@ -1474,7 +1479,7 @@ function showAnalyzeLoading(ticker, steps) {
         ${steps.map((s, i) => `<div class="lstep-item${i===0?' lstep-act':''}">${i===0?'▶ '+s:'  '+s}</div>`).join('')}
       </div>
       <div style="font-size:10px;color:var(--t3);margin-top:10px;text-align:center;line-height:1.6;">
-        Ensemble analysis takes ~15-20s for maximum accuracy
+        Analysis takes ~15-20s · Live data + AI forecast
       </div>
     </div>`;
   const start = Date.now();
@@ -3104,7 +3109,7 @@ async function runBacktest() {
 
     for (const proxy of proxies) {
       try {
-        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(10000)});
+        const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(5000)});
         if (!r.ok) continue;
         const data = await r.json();
         const result_data = data?.chart?.result?.[0];
