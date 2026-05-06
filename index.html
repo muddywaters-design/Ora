@@ -1146,19 +1146,18 @@ async function runAnalysis(sym) {
   ];
   showAnalyzeLoading(t, steps);
 
-  // Realistic step timing — market data first, then Claude calls
+  // Simple interval-based progress — 1 step every 4 seconds
   let stepIdx = 0;
-  const stepTimes = [800, 1200, 1400, 2000, 5000, 5000, 1000];
-  let cumulativeDelay = 0;
-  const stepTimers = stepTimes.map((delay, i) => {
-    cumulativeDelay += delay;
-    return setTimeout(() => {
-      const els = document.querySelectorAll('.lstep-item');
-      if (els[i]) { els[i].className = 'lstep-done'; els[i].textContent = '✓ ' + steps[i].replace(/^[^\s]+ /, ''); }
-      if (els[i+1]) els[i+1].className = 'lstep-act';
-    }, cumulativeDelay);
-  });
-  const iv = { clear: () => stepTimers.forEach(t => clearTimeout(t)) };
+  const els0 = document.querySelectorAll('.lstep-item');
+  if (els0[0]) els0[0].className = 'lstep-act';
+  const iv = setInterval(() => {
+    const els = document.querySelectorAll('.lstep-item');
+    if (stepIdx < els.length) {
+      if (els[stepIdx]) { els[stepIdx].className = 'lstep-done'; els[stepIdx].textContent = '✓ ' + steps[stepIdx].replace(/^\S+ /, ''); }
+      stepIdx++;
+      if (stepIdx < els.length && els[stepIdx]) els[stepIdx].className = 'lstep-act';
+    }
+  }, 4000);
 
   try {
     // Fetch all data sources in parallel for speed
@@ -1173,11 +1172,42 @@ async function runAnalysis(sym) {
     if(els2[4]) els2[4].className='lstep-act';
     const fgData = null;
     if (!liveData) {
-      // Show warning in loading area
+      // Retry once with a different proxy before showing warning
+      try {
+        const retryUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/' + t + '?interval=1d&range=5d';
+        const retryProxies = ['https://corsproxy.io/?', 'https://api.allorigins.win/raw?url='];
+        for (const proxy of retryProxies) {
+          try {
+            const rr = await fetch(proxy + encodeURIComponent(retryUrl), {signal: AbortSignal.timeout(8000)});
+            if (rr.ok) {
+              const dd = await rr.json();
+              const mm = dd?.chart?.result?.[0]?.meta;
+              if (mm?.regularMarketPrice) {
+                liveData = {
+                  price: mm.regularMarketPrice.toFixed(2),
+                  change: ((mm.regularMarketPrice - (mm.chartPreviousClose||mm.regularMarketPrice))).toFixed(2),
+                  changePct: (((mm.regularMarketPrice - (mm.chartPreviousClose||mm.regularMarketPrice))/(mm.chartPreviousClose||mm.regularMarketPrice))*100).toFixed(2),
+                  high52: mm.fiftyTwoWeekHigh?.toFixed(2)||'—',
+                  low52: mm.fiftyTwoWeekLow?.toFixed(2)||'—',
+                  marketCap: mm.marketCap ? formatMarketCap(mm.marketCap) : '—',
+                  volume: mm.regularMarketVolume?.toLocaleString()||'—',
+                  currency: 'USD', rsi:'—', macd:'—', macdSignal:'—',
+                  bb_upper:'—', bb_lower:'—', bb_mid:'—', putCallRatio:'—',
+                  source: 'Yahoo Finance (fallback)',
+                };
+                break;
+              }
+            }
+          } catch(_) {}
+        }
+      } catch(_) {}
+    }
+    // Only show warning if still no data after retry
+    if (!liveData) {
       const warn = document.createElement('div');
       warn.id = 'live-warn';
-      warn.style.cssText = 'background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.2);border-radius:8px;padding:10px 14px;margin:0 20px;font-size:12px;color:var(--yellow);text-align:center;';
-      warn.innerHTML = '⚠️ Live price unavailable via this interface. <b>Download the HTML file</b> and open in your browser for real-time data.';
+      warn.style.cssText = 'background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.2);border-radius:8px;padding:10px 14px;margin:8px 20px;font-size:11px;color:var(--yellow);text-align:center;';
+      warn.innerHTML = '⚠️ Could not fetch live price — analysis will use AI estimates only.';
       const loading = document.querySelector('.loading');
       if (loading) loading.appendChild(warn);
     }
@@ -1259,12 +1289,12 @@ async function runAnalysis(sym) {
     // Auto-calibrate confidence based on data signal agreement
     calibrateConfidence(parsed, liveData);
     currentResult = parsed;
-    iv.clear();
+    clearInterval(iv);
     clearInterval(window._elapsedInterval);
     renderAnalysis(t, parsed);
     document.getElementById('liveLabel').textContent = 'LIVE';
   } catch (e) {
-    iv.clear();
+    clearInterval(iv);
     document.getElementById('analyzeContent').innerHTML = `<div class="err-box">⚠️ ${e.message}</div>`;
     document.getElementById('liveLabel').textContent = 'ERROR';
   } finally {
