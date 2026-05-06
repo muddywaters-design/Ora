@@ -1558,7 +1558,10 @@ function renderAnalysis(ticker, d) {
 
     ${(()=>{
       if (d.live_change === undefined) {
-        return `<div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;gap:8px;"><span>⚠️</span><span>Live price unavailable in this interface. <b>Open the downloaded HTML file in your browser</b> for real-time Yahoo Finance data.</span></div>`;
+        return `<div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;justify-content:space-between;gap:8px;">
+  <span>⚠️ Live price unavailable — proxies may be rate-limited. Analysis uses AI estimates.</span>
+  <button onclick="runAnalysis(document.getElementById('tickerInput').value)" style="background:rgba(255,208,96,.2);border:1px solid rgba(255,208,96,.4);color:var(--yellow);padding:4px 10px;border-radius:6px;font-family:var(--mono);font-size:9px;cursor:pointer;flex-shrink:0;">↺ Retry</button>
+</div>`;
       }
       let html = `<div style="background:var(--s1);border:1px solid rgba(0,229,160,.2);border-radius:10px;padding:10px 16px;">
         <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;">LIVE MARKET DATA &nbsp;⚡ Yahoo Finance Live</div>
@@ -1608,17 +1611,15 @@ function renderAnalysis(ticker, d) {
 
 
 
-    ${d.primary_driver ? `<div style="padding:10px 16px;border:1px solid var(--b1);border-radius:10px;background:rgba(77,168,255,.04);margin-top:8px;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-        <div style="flex:1;">
-          <div style="font-size:9px;color:var(--blue);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px;">⚡ Primary Driver</div>
-          <div style="font-size:12px;color:var(--t1);line-height:1.5;">${d.primary_driver}</div>
-        </div>
-        ${d.stop_loss ? `<div style="text-align:right;flex-shrink:0;">
-          <div style="font-size:9px;color:var(--red);font-family:var(--mono);text-transform:uppercase;margin-bottom:3px;">⛔ Stop Loss</div>
-          <div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--red);">${d.stop_loss}</div>
-        </div>` : ''}
+    ${d.primary_driver ? `<div style="padding:12px 16px;border:1px solid var(--b1);border-radius:10px;background:rgba(77,168,255,.04);margin-top:8px;display:flex;flex-direction:column;gap:10px;">
+      <div>
+        <div style="font-size:9px;color:var(--blue);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">⚡ Primary Driver</div>
+        <div style="font-size:12px;color:var(--t1);line-height:1.6;">${d.primary_driver}</div>
       </div>
+      ${d.stop_loss ? `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(255,68,102,.06);border:1px solid rgba(255,68,102,.2);border-radius:8px;">
+        <span style="font-size:10px;color:var(--t3);">⛔ Stop Loss / Invalidation level:</span>
+        <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--red);">${d.stop_loss}</span>
+      </div>` : ''}
     </div>` : ''}
     <div class="src-bar">
       <span class="src-lbl">Sources</span>
