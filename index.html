@@ -486,6 +486,8 @@ function toggleTheme() {
 })();
 
 renderWatchlist();
+// Auto-check forecasts after short delay
+setTimeout(autoCheckForecasts, 2000);
 
 // ── Navigation ─────────────────────────────────────────────────
 function toggleDrawer() {
@@ -517,7 +519,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
-    system: 'You are StockOracle, an elite quantitative analyst combining technical analysis, fundamental research, and market microstructure. Your forecasts are data-driven, specific, and calibrated. You always output valid JSON when asked. You think step by step: (1) evaluate technical signals, (2) assess fundamentals, (3) consider market microstructure (short interest, options flow, institutional positioning), (4) apply macro overlay, (5) identify catalysts, (6) synthesize into probability-weighted forecasts. Confidence >75% only when 4+ signals agree. Always provide bull and bear scenarios.',
+    system: 'You are StockOracle, an elite quantitative analyst combining technical analysis, fundamental research, and market microstructure. Your forecasts are data-driven, specific, and calibrated. You always output valid JSON when asked. You think step by step: (1) evaluate technical signals, (2) assess fundamentals, (3) consider market microstructure (short interest, options flow, institutional positioning), (4) apply macro overlay, (5) identify catalysts, (6) synthesize into probability-weighted forecasts. Confidence >75% only when 4+ signals agree. Always provide bull and bear scenarios. When web search is available, ALWAYS search for the latest news, earnings, and analyst ratings for the stock before forecasting.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -539,17 +541,17 @@ async function searchThenSummarize(prompt, maxTokens) {
   return toJSON(prompt, maxTokens || 1500);
 }
 
-async function toJSON(prompt) {
-  const d = await apiCall([{ role: 'user', content: prompt }], false, 2000);
+async function toJSON(prompt, useSearch) {
+  const d = await apiCall([{ role: 'user', content: prompt }], useSearch || false, 2000);
   return d.content.filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
 // ── Ensemble Forecasting ──────────────────────────────────────
 // Runs 2 parallel Claude calls and averages (faster than 3)
-async function toJSONEnsemble(prompt) {
+async function toJSONEnsemble(prompt, useSearch) {
   // Single call for speed
   const results = await Promise.allSettled([
-    toJSON(prompt),
+    toJSON(prompt, useSearch),
   ]);
 
   const parsed = [];
@@ -637,6 +639,27 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   const optFlowCtx = optionsData?.flowBias && optionsData.flowBias!=='—'
     ? `OptionsFlow:${optionsData.flowBias},P/C:${optionsData.pcRatio},${optionsData.unusualSignal}.`
     : '';
+  // Earnings proximity warning
+  const earningsCtx = (() => {
+    if (!liveData?.nextEarnings || liveData.nextEarnings === '—') return '';
+    try {
+      const nextDate = new Date(liveData.nextEarnings);
+      const daysUntil = Math.round((nextDate - Date.now()) / 86400000);
+      if (daysUntil <= 7 && daysUntil >= 0) return `EARNINGS IN ${daysUntil}d — HIGH VOLATILITY RISK. Reduce short-term confidence.`;
+      if (daysUntil <= 30 && daysUntil >= 0) return `Earnings in ${daysUntil} days — factor binary event risk into forecasts.`;
+    } catch(_) {}
+    return '';
+  })();
+
+  // Sector rotation signal
+  const sectorRotCtx = (() => {
+    if (!liveData?.sectorRelative || liveData.sectorRelative === '—') return '';
+    const diff = parseFloat(liveData.sectorRelative);
+    if (diff < -5) return `SECTOR ROTATION WARNING: ${liveData.sectorETF} underperforming by ${diff}% — money flowing OUT of sector.`;
+    if (diff > 5) return `SECTOR INFLOW: ${liveData.sectorETF} outperforming by +${diff}% — money flowing INTO sector.`;
+    return '';
+  })();
+
   const breakoutCtx = (() => {
     if (!liveData?.price || !liveData?.high52 || !liveData?.low52) return '';
     const p=parseFloat(liveData.price), h=parseFloat(liveData.high52), l=parseFloat(liveData.low52);
@@ -647,7 +670,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     if (parseFloat(pL)<6) return `Near52WLow(+${pL}%fromLow).`;
     return '';
   })();
-  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx}
+  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
@@ -1255,6 +1278,7 @@ async function runAnalysis(sym) {
     '📡 Fetching live market data…',
     '📊 Processing technicals…',
     '🏢 Checking sector & analyst data…',
+    '🌐 Searching latest news & analyst reports…',
     '🧠 Running AI forecast model…',
     '✅ Building forecast report…',
   ];
@@ -1362,7 +1386,7 @@ async function runAnalysis(sym) {
       if (loading) loading.appendChild(warn);
     }
     if(window._advanceStep) window._advanceStep(); // Step: Running AI
-    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData));
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData), true);
     if(window._advanceStep) window._advanceStep(); // Step: Building report
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
@@ -2558,6 +2582,53 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
 // ── Portfolio ──────────────────────────────────────────────────
 // ── Accuracy Calibration System ──────────────────────────────
 let forecastHistory = JSON.parse(localStorage.getItem('so_forecast_history') || '[]');
+
+// Auto-check forecasts on page load (once per day)
+async function autoCheckForecasts() {
+  const lastCheck = localStorage.getItem('so_last_auto_check');
+  const today = new Date().toDateString();
+  if (lastCheck === today) return; // already checked today
+
+  const pending = forecastHistory.filter(r => {
+    const daysSince = (Date.now() - new Date(r.date)) / 86400000;
+    return daysSince >= 7 && !r.outcomes?.week?.verdict; // week forecasts ready to evaluate
+  });
+
+  if (pending.length === 0) { localStorage.setItem('so_last_auto_check', today); return; }
+
+  // Show notification
+  showAutoCheckBanner(pending.length);
+}
+
+function showAutoCheckBanner(count) {
+  const existing = document.getElementById('autoCheckBanner');
+  if (existing) existing.remove();
+
+  const banner = document.createElement('div');
+  banner.id = 'autoCheckBanner';
+  banner.style.cssText = 'background:rgba(77,168,255,.1);border:1px solid rgba(77,168,255,.25);border-radius:8px;padding:10px 16px;margin:0 14px 10px;display:flex;align-items:center;justify-content:space-between;gap:10px;';
+  banner.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="font-size:14px;">📊</span>
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;font-weight:700;color:var(--blue);">FORECAST UPDATE AVAILABLE</div>
+        <div style="font-size:10px;color:var(--t3);">${count} forecast${count>1?'s':''} ready to evaluate — check accuracy</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;flex-shrink:0;">
+      <button onclick="goTo('watchlist');document.getElementById('autoCheckBanner')?.remove()"
+        style="background:var(--blue);color:var(--bg);border:none;padding:6px 12px;border-radius:6px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;">
+        Check Now
+      </button>
+      <button onclick="localStorage.setItem('so_last_auto_check',new Date().toDateString());this.closest('#autoCheckBanner').remove()"
+        style="background:none;border:1px solid var(--b2);color:var(--t3);padding:6px 10px;border-radius:6px;font-size:10px;cursor:pointer;">
+        Later
+      </button>
+    </div>`;
+
+  const analyzeContent = document.getElementById('analyzeContent');
+  if (analyzeContent) analyzeContent.insertBefore(banner, analyzeContent.firstChild);
+}
 
 function recordForecast(ticker, forecasts, livePrice) {
   const record = {
