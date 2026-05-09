@@ -519,7 +519,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
-    system: 'You are StockOracle, an elite quantitative analyst combining technical analysis, fundamental research, and market microstructure. Your forecasts are data-driven, specific, and calibrated. You always output valid JSON when asked. You think step by step: (1) evaluate technical signals, (2) assess fundamentals, (3) consider market microstructure (short interest, options flow, institutional positioning), (4) apply macro overlay, (5) identify catalysts, (6) synthesize into probability-weighted forecasts. Confidence >75% only when 4+ signals agree. Always provide bull and bear scenarios. When web search is available, ALWAYS search for the latest news, earnings, and analyst ratings for the stock before forecasting.',
+    system: 'You are StockOracle, an elite quant analyst. Output valid JSON only. Think step by step: technicals → fundamentals → microstructure → macro → catalysts → forecast. Confidence >75% only when 4+ signals agree. Always include bull/bear scenarios. Search for latest news before forecasting.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -542,7 +542,7 @@ async function searchThenSummarize(prompt, maxTokens) {
 }
 
 async function toJSON(prompt, useSearch) {
-  const d = await apiCall([{ role: 'user', content: prompt }], useSearch || false, 2000);
+  const d = await apiCall([{ role: 'user', content: prompt }], useSearch || false, 4000);
   return d.content.filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
@@ -630,12 +630,10 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   const revCtx  = liveData?.analystRevision && liveData.analystRevision!=='—' ? `AnalystTrend:${liveData.analystRevision}(${liveData.analystRevisionLabel}).` : '';
   const betaCtx = liveData?.beta && liveData.beta!=='—' ? `Beta:${liveData.beta}(${liveData.betaLabel}),CorrSPY:${liveData.correlation}.` : '';
   const divCtx  = liveData?.dividendYield && liveData.dividendYield!=='—' ? `Div:${liveData.dividendYield}(${liveData.dividendLabel}).` : '';
-  const insiderCtx = insiderData ? `InsiderActivity:${insiderData.net}(${insiderData.buys}buys,${insiderData.sells}sells in 90d).` : '';
+  const insiderCtx = insiderData?.net && insiderData.net!=='—' ? `Insider:${insiderData.net}(${insiderData.buys}B/${insiderData.sells}S).` : '';
   const trendsCtx  = trendsData  ? `GoogleTrends:${trendsData.signal},${trendsData.trend_change}%change.` : '';
   const fg = fgData ? `Fear&Greed: ${fgData.score}/100 (${fgData.rating}).` : '';
-  const shortCtx   = shortData?.shortPct && shortData.shortPct!=='—'
-    ? `ShortInterest:${shortData.shortPct}(${shortData.shortRatio}toCover),${shortData.squeezeScore}.Inst:${shortData.instPct}(${shortData.instTrend}).`
-    : '';
+  const shortCtx   = shortData?.shortPct && shortData.shortPct!=='—' ? `Short:${shortData.shortPct}(${shortData.shortRatio}cover),${shortData.squeezeScore}.` : '';
   const optFlowCtx = optionsData?.flowBias && optionsData.flowBias!=='—'
     ? `OptionsFlow:${optionsData.flowBias},P/C:${optionsData.pcRatio},${optionsData.unusualSignal}.`
     : '';
@@ -682,7 +680,7 @@ function mkJSONPrompt(ticker, research) {
 
 ${research.slice(0, 1500)}
 
-{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"Technical basis.","bull_case":"If X happens.","bear_case":"Risk if Y.","key_level":"$X support/resistance"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"Fundamental basis.","bull_case":"If X.","bear_case":"Risk.","key_level":"$X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"Macro basis.","bull_case":"If X.","bear_case":"Risk.","key_level":"$X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"Thesis.","bull_case":"If X.","bear_case":"Risk.","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
+{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"NEUTRAL","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
 }
 
 
