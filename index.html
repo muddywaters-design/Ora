@@ -1942,30 +1942,34 @@ function renderWatchlist() {
     return;
   }
 
-  tbl.innerHTML = `
-    <div class="wl-row wl-thead">
-      <div>Ticker</div><div>Company</div>
-      <div class="wl-col-wk">1 Week</div>
-      <div class="wl-col-mo">1 Month</div>
-      <div class="wl-col-yr">1 Year</div>
-      <div>Signal</div><div>Accuracy</div><div></div>
-    </div>` +
-    watchlist.map(w => {
-      const sc = sc2cls(w.signal);
-      return `<div class="wl-row">
-        <div class="wl-tick" onclick="goAnalyze('${w.ticker}')">${w.ticker}</div>
-        <div class="wl-co">${w.company}</div>
-        <div class="wl-col-wk" style="font-family:var(--mono);font-size:12px" class="${sc}">${w.weekForecast}</div>
-        <div class="wl-col-mo" style="font-family:var(--mono);font-size:12px">${w.monthForecast||'—'}</div>
-        <div class="wl-col-yr" style="font-family:var(--mono);font-size:12px">${w.yearForecast||'—'}</div>
-        <div><span class="badge ${sc==='bull'?'bg':sc==='bear'?'br':'by'}" style="font-size:9px">${w.signal}</span></div>
-        <div>
-          <button class="btn-acc" id="acc-btn-${w.ticker}" onclick="checkAccuracy('${w.ticker}')">⚡ Check</button>
+  tbl.innerHTML = watchlist.map(w => {
+    const sc = sc2cls(w.signal);
+    const sigBadge = sc==='bull'?'bg':sc==='bear'?'br':'by';
+    return `
+      <div style="padding:12px 14px;border-bottom:1px solid var(--b1);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+            <span class="wl-tick" onclick="goAnalyze('${w.ticker}')" style="font-family:var(--mono);font-size:15px;font-weight:700;color:var(--blue);cursor:pointer;flex-shrink:0;">${w.ticker}</span>
+            <span style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${w.company}</span>
+          </div>
+          <button onclick="removeFromWatchlist('${w.ticker}')"
+            style="background:rgba(255,68,102,.1);border:1px solid rgba(255,68,102,.25);color:var(--red);cursor:pointer;font-size:10px;padding:4px 10px;border-radius:6px;font-family:var(--mono);font-weight:700;flex-shrink:0;margin-left:6px;">
+            ✕
+          </button>
         </div>
-        <div><button onclick="removeFromWatchlist('${w.ticker}')" style="background:rgba(255,68,102,.1);border:1px solid rgba(255,68,102,.25);color:var(--red);cursor:pointer;font-size:11px;padding:5px 10px;border-radius:6px;font-family:var(--mono);font-weight:700;">✕ Remove</button></div>
-      </div>
-      <div id="acc-result-${w.ticker}" style="display:none;padding:0 16px 12px;"></div>`;
-    }).join('');
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span class="badge ${sigBadge}" style="font-size:9px;">${w.signal}</span>
+            ${w.weekForecast ? `<span style="font-family:var(--mono);font-size:10px;color:var(--t3);">1W: <b style="color:var(--t2)">${w.weekForecast}</b></span>` : ''}
+            ${w.monthForecast ? `<span style="font-family:var(--mono);font-size:10px;color:var(--t3);">1M: <b style="color:var(--t2)">${w.monthForecast}</b></span>` : ''}
+            <span style="font-size:10px;color:var(--t3);">${w.date||''}</span>
+          </div>
+          <button class="btn-acc" id="acc-btn-${w.ticker}" onclick="checkAccuracy('${w.ticker}')"
+            style="flex-shrink:0;">⚡ Check</button>
+        </div>
+        <div id="acc-result-${w.ticker}" style="display:none;padding:8px 0 0;"></div>
+      </div>`;
+  }).join('');
 }
 
 // ── Check Accuracy ────────────────────────────────────────────
