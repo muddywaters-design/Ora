@@ -503,7 +503,10 @@ function goTo(page) {
   document.getElementById('nav-' + page).classList.add('active');
   toggleDrawer();
   if (page === 'portfolio') renderPortfolio();
-  if (page === 'watchlist') renderWatchlist();
+  if (page === 'watchlist') {
+    renderWatchlist();
+    refreshWatchlistPrices();
+  }
 }
 
 // ── API ────────────────────────────────────────────────────────
@@ -519,7 +522,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
-    system: 'You are StockOracle, an elite quant analyst. Output valid JSON only. Think step by step: technicals → fundamentals → microstructure → macro → catalysts → forecast. Confidence >75% only when 4+ signals agree. Always include bull/bear scenarios. Search for latest news before forecasting.',
+    system: 'You are StockOracle, an elite quant analyst. Output valid JSON only. IMPORTANT: Focus on forecasting DIRECTION (UP/DOWN/SIDEWAYS) with WIDE probability ranges rather than precise percentages. A correct direction call is more valuable than a precise number. Think: technicals → fundamentals → microstructure → macro → catalysts → direction + magnitude. Use wide ranges (e.g. +5% to +30%) that capture realistic outcomes. Confidence >70% only when 4+ signals agree. Always include bull/bear scenarios. Search for latest news before forecasting.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -680,7 +683,7 @@ function mkJSONPrompt(ticker, research) {
 
 ${research.slice(0, 1500)}
 
-{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"NEUTRAL","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
+{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"UP","magnitude":"MODERATE","range_low":"+2%","range_high":"+12%","confidence":68,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"month":{"direction":"UP","magnitude":"STRONG","range_low":"+5%","range_high":"+25%","confidence":62,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"half_year":{"direction":"UP","magnitude":"MODERATE","range_low":"+8%","range_high":"+40%","confidence":52,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"year":{"direction":"UP","magnitude":"STRONG","range_low":"+15%","range_high":"+60%","confidence":44,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
 }
 
 
@@ -1544,7 +1547,11 @@ function renderAnalysis(ticker, d) {
     const f = fs[key] || {}; const fc = sc2cls(f.signal||'NEUTRAL');
     return `<div class="fc-cell" style="--acc:${acc}">
       <div class="fc-tf">${label}</div>
-      <div class="fc-dir" style="color:${f.direction&&f.direction[0]==='-'?'var(--red)':f.direction&&f.direction[0]==='+'?'var(--green)':'var(--yellow)'}">${f.direction||'—'}</div>
+      <div class="fc-dir" style="color:${f.signal==='BULLISH'?'var(--green)':f.signal==='BEARISH'?'var(--red)':'var(--yellow)'}">
+        ${f.direction==='UP'?'↑ UP':f.direction==='DOWN'?'↓ DOWN':f.direction||f.signal||'—'}
+      </div>
+      ${(f.range_low||f.range_high) ? `<div style="font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:2px;">${f.range_low||''} → ${f.range_high||''}</div>` : (f.range ? `<div style="font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:2px;">${f.range}</div>` : '')}
+      ${f.magnitude ? `<div style="display:inline-block;padding:2px 7px;border-radius:20px;font-family:var(--mono);font-size:9px;margin-top:3px;background:${f.magnitude==='STRONG'?'rgba(0,229,160,.12)':f.magnitude==='WEAK'?'rgba(255,68,102,.1)':'rgba(255,208,96,.1)'};color:${f.magnitude==='STRONG'?'var(--green)':f.magnitude==='WEAK'?'var(--red)':'var(--yellow)'};">${f.magnitude}</div>` : ''}
       <div class="fc-rng">${f.range||'—'}</div>
       <div class="cbar"><div class="cfill" style="width:${f.confidence||0}%"></div></div>
       <div class="fc-cf"><span class="${fc}">${f.signal||'NEUTRAL'}</span><span style="color:var(--t3)">${f.confidence||0}% conf</span></div>
@@ -1930,6 +1937,28 @@ function removeFromWatchlist(ticker) {
   renderWatchlist();
 }
 
+async function refreshWatchlistPrices() {
+  if (watchlist.length === 0) return;
+  // Fetch all prices in parallel
+  await Promise.allSettled(
+    watchlist.map(w =>
+      fetchLivePrice(w.ticker).then(live => {
+        if (live?.price) {
+          w.livePrice  = parseFloat(live.price);
+          w.liveChange = parseFloat(live.changePct);
+          // Update the price span if visible
+          const el = document.getElementById('wl-price-' + w.ticker);
+          if (el) {
+            const col = w.liveChange >= 0 ? 'var(--green)' : 'var(--red)';
+            el.innerHTML = '<b style="color:var(--t1)">$' + w.livePrice.toFixed(2) + '</b> <span style="color:' + col + '">' + (w.liveChange>=0?'+':'') + w.liveChange.toFixed(2) + '%</span>';
+          }
+        }
+      }).catch(() => {})
+    )
+  );
+  localStorage.setItem('so_wl2', JSON.stringify(watchlist));
+}
+
 function renderWatchlist() {
   document.getElementById('wlBadge').textContent = watchlist.length;
   document.getElementById('wlSubtitle').textContent = watchlist.length + ' stock' + (watchlist.length !== 1 ? 's' : '') + ' tracked';
@@ -1957,11 +1986,12 @@ function renderWatchlist() {
             ✕
           </button>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <span class="badge ${sigBadge}" style="font-size:9px;">${w.signal}</span>
-            ${w.weekForecast ? `<span style="font-family:var(--mono);font-size:10px;color:var(--t3);">1W: <b style="color:var(--t2)">${w.weekForecast}</b></span>` : ''}
-            ${w.monthForecast ? `<span style="font-family:var(--mono);font-size:10px;color:var(--t3);">1M: <b style="color:var(--t2)">${w.monthForecast}</b></span>` : ''}
+            <span id="wl-price-${w.ticker}" style="font-family:var(--mono);font-size:11px;color:var(--t3);">
+              ${w.livePrice ? `<b style="color:var(--t1)">$${w.livePrice}</b> <span style="color:${w.liveChange>=0?'var(--green)':'var(--red)'}">${w.liveChange>=0?'+':''}${w.liveChange?.toFixed(2)}%</span>` : ''}
+            </span>
             <span style="font-size:10px;color:var(--t3);">${w.date||''}</span>
           </div>
           <button class="btn-acc" id="acc-btn-${w.ticker}" onclick="checkAccuracy('${w.ticker}')"
