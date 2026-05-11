@@ -2056,34 +2056,42 @@ function renderWatchlist() {
     return;
   }
 
-  tbl.innerHTML = displayList.map(w => {
-    const sc = sc2cls(w.signal);
+  tbl.innerHTML = displayList.map(function(w) {
+    const sc = sc2cls(w.signal||'NEUTRAL');
     const sigBadge = sc==='bull'?'bg':sc==='bear'?'br':'by';
-    return `
-      <div style="padding:12px 14px;border-bottom:1px solid var(--b1);">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-            <span class="wl-tick" onclick="goAnalyze('${w.ticker}')" style="font-family:var(--mono);font-size:15px;font-weight:700;color:var(--blue);cursor:pointer;flex-shrink:0;">${w.ticker}</span>
-            <span style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${w.company}</span>
-          </div>
-          <button onclick="removeFromWatchlist('${w.ticker}')"
-            style="background:rgba(255,68,102,.1);border:1px solid rgba(255,68,102,.25);color:var(--red);cursor:pointer;font-size:10px;padding:4px 10px;border-radius:6px;font-family:var(--mono);font-weight:700;flex-shrink:0;margin-left:6px;">
-            ✕
-          </button>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span class="badge ${sigBadge}" style="font-size:9px;">${w.signal}</span>
-            <span id="wl-price-${w.ticker}" style="font-family:var(--mono);font-size:11px;color:var(--t3);">
-              ${w.livePrice ? `<b style="color:var(--t1)">$${w.livePrice}</b> <span style="color:${w.liveChange>=0?'var(--green)':'var(--red)'}">${w.liveChange>=0?'+':''}${w.liveChange?.toFixed(2)}%</span>` : ''}
-            </span>
-            <span style="font-size:10px;color:var(--t3);">${w.date||''}</span>
-          </div>
-          <button class="btn-acc" id="acc-btn-${w.ticker}" onclick="checkAccuracy('${w.ticker}')"
-            style="flex-shrink:0;">⚡ Check</button>
-        </div>
-        <div id="acc-result-${w.ticker}" style="display:none;padding:8px 0 0;"></div>
-      </div>`;
+    const ticker = w.ticker || '?';
+    const company = w.company || '';
+    const signal = w.signal || 'NEUTRAL';
+    const date = w.date || '';
+
+    // Live price display
+    let priceHtml = '';
+    if (w.livePrice && typeof w.livePrice === 'number') {
+      const chg = typeof w.liveChange === 'number' ? w.liveChange : 0;
+      const col = chg >= 0 ? 'var(--green)' : 'var(--red)';
+      const sign = chg >= 0 ? '+' : '';
+      priceHtml = '<b style="color:var(--t1)">$' + w.livePrice.toFixed(2) + '</b> ' +
+                  '<span style="color:' + col + '">' + sign + chg.toFixed(2) + '%</span>';
+    }
+
+    return '<div style="padding:12px 14px;border-bottom:1px solid var(--b1);">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+        '<div style="display:flex;align-items:center;gap:10px;min-width:0;">' +
+          '<span class="wl-tick" data-ticker="' + ticker + '" onclick="goAnalyze(this.dataset.ticker)" style="font-family:var(--mono);font-size:15px;font-weight:700;color:var(--blue);cursor:pointer;flex-shrink:0;">' + ticker + '</span>' +
+          '<span style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + company + '</span>' +
+        '</div>' +
+        '<button data-ticker="' + ticker + '" onclick="removeFromWatchlist(this.dataset.ticker)" style="background:rgba(255,68,102,.1);border:1px solid rgba(255,68,102,.25);color:var(--red);cursor:pointer;font-size:10px;padding:4px 10px;border-radius:6px;font-family:var(--mono);font-weight:700;flex-shrink:0;margin-left:6px;">✕</button>' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<span class="badge ' + sigBadge + '" style="font-size:9px;">' + signal + '</span>' +
+          '<span id="wl-price-' + ticker + '" style="font-family:var(--mono);font-size:11px;">' + priceHtml + '</span>' +
+          '<span style="font-size:10px;color:var(--t3);">' + date + '</span>' +
+        '</div>' +
+        '<button class="btn-acc" id="acc-btn-' + ticker + '" data-ticker="' + ticker + '" onclick="checkAccuracy(this.dataset.ticker)" style="flex-shrink:0;">⚡ Check</button>' +
+      '</div>' +
+      '<div id="acc-result-' + ticker + '" style="display:none;padding:8px 0 0;"></div>' +
+    '</div>';
   }).join('');
 }
 
