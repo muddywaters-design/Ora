@@ -2011,36 +2011,45 @@ function renderWatchlist() {
     btn.textContent = (f==='date'?'📅 Date Added':f==='change_pct'?'% Change':f==='change_val'?'$ Change':'📊 Signal') + (active ? (wlSortDir===-1?' ↓':' ↑') : '');
   });
 
-  // Sort watchlist
-  const sorted = [...watchlist].sort((a, b) => {
-    if (wlSortBy === 'change_pct') {
-      const av = a.liveChange ?? -999, bv = b.liveChange ?? -999;
-      return (bv - av) * wlSortDir;
-    }
-    if (wlSortBy === 'change_val') {
-      const ap = (a.livePrice||0), bp = (b.livePrice||0);
-      const apc = a.data?.current_price ? parseFloat(a.data.current_price.replace(/[^0-9.]/g,'')) : 0;
-      const bpc = b.data?.current_price ? parseFloat(b.data.current_price.replace(/[^0-9.]/g,'')) : 0;
-      const av = (ap - apc) * (a.liveChange > 0 ? 1 : -1);
-      const bv = (bp - bpc) * (b.liveChange > 0 ? 1 : -1);
-      return (bv - av) * wlSortDir;
-    }
-    if (wlSortBy === 'signal') {
-      const order = {BULLISH:0, NEUTRAL:1, BEARISH:2};
-      return ((order[a.signal]??1) - (order[b.signal]??1)) * wlSortDir;
-    }
-    // Default: date added (newest first)
-    return (new Date(b.date||0) - new Date(a.date||0)) * wlSortDir;
-  });
+  // Sort watchlist safely
+  let sorted = [];
+  try {
+    sorted = [...watchlist].sort((a, b) => {
+      try {
+        if (wlSortBy === 'change_pct') {
+          const av = typeof a.liveChange === 'number' ? a.liveChange : -999;
+          const bv = typeof b.liveChange === 'number' ? b.liveChange : -999;
+          return (bv - av) * wlSortDir;
+        }
+        if (wlSortBy === 'signal') {
+          const order = {BULLISH:0, NEUTRAL:1, BEARISH:2};
+          const ao = order[a.signal] !== undefined ? order[a.signal] : 1;
+          const bo = order[b.signal] !== undefined ? order[b.signal] : 1;
+          return (ao - bo) * wlSortDir;
+        }
+        // Default: date added
+        const da = a.date ? new Date(a.date).getTime() : 0;
+        const db = b.date ? new Date(b.date).getTime() : 0;
+        return (db - da) * wlSortDir;
+      } catch(sortErr) { return 0; }
+    });
+  } catch(e) {
+    sorted = [...watchlist]; // fallback: no sort
+  }
 
   const tbl = document.getElementById('wlTable');
   if (!tbl) return; // DOM not ready
-  if (sorted.length === 0) {
+  
+  // Emergency: if sorted empty but watchlist has items, use watchlist directly
+  const displayList = (sorted.length > 0) ? sorted : 
+                      (watchlist.length > 0 ? [...watchlist] : []);
+  
+  if (displayList.length === 0) {
     tbl.innerHTML = '<div class="wl-empty-msg">No stocks tracked yet.<br>Analyze a ticker and press <b style="color:var(--green)">+ Track</b> to add it here.</div>';
     return;
   }
 
-  tbl.innerHTML = sorted.map(w => {
+  tbl.innerHTML = displayList.map(w => {
     const sc = sc2cls(w.signal);
     const sigBadge = sc==='bull'?'bg':sc==='bear'?'br':'by';
     return `
