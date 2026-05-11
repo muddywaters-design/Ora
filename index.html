@@ -513,7 +513,8 @@ function toggleTheme() {
   }
 })();
 
-renderWatchlist();
+// Render watchlist only when wlTable exists
+if (document.getElementById('wlTable')) renderWatchlist();
 // Auto-check forecasts after short delay
 setTimeout(autoCheckForecasts, 2000);
 
@@ -532,8 +533,10 @@ function goTo(page) {
   toggleDrawer();
   if (page === 'portfolio') renderPortfolio();
   if (page === 'watchlist') {
-    renderWatchlist();
-    refreshWatchlistPrices();
+    setTimeout(() => {
+      renderWatchlist();
+      refreshWatchlistPrices();
+    }, 50);
   }
 }
 
@@ -2031,7 +2034,8 @@ function renderWatchlist() {
   });
 
   const tbl = document.getElementById('wlTable');
-  if (watchlist.length === 0) {
+  if (!tbl) return; // DOM not ready
+  if (sorted.length === 0) {
     tbl.innerHTML = '<div class="wl-empty-msg">No stocks tracked yet.<br>Analyze a ticker and press <b style="color:var(--green)">+ Track</b> to add it here.</div>';
     return;
   }
