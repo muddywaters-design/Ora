@@ -407,6 +407,26 @@ body.light .live-label { color: var(--green); }
         </div>
       </div>
       <div id="accDashboard"></div>
+      <!-- Sort bar -->
+      <div id="wlSortBar" style="display:none;padding:8px 14px;background:var(--s2);border:1px solid var(--b1);border-radius:10px;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;">Sort by:</span>
+        <button onclick="setWlSort('date')" id="sort-date"
+          style="padding:4px 10px;border-radius:20px;font-family:var(--mono);font-size:10px;cursor:pointer;border:1px solid var(--b2);background:transparent;color:var(--t2);transition:all .15s;">
+          📅 Date Added
+        </button>
+        <button onclick="setWlSort('change_pct')" id="sort-pct"
+          style="padding:4px 10px;border-radius:20px;font-family:var(--mono);font-size:10px;cursor:pointer;border:1px solid var(--b2);background:transparent;color:var(--t2);transition:all .15s;">
+          % Change
+        </button>
+        <button onclick="setWlSort('change_val')" id="sort-val"
+          style="padding:4px 10px;border-radius:20px;font-family:var(--mono);font-size:10px;cursor:pointer;border:1px solid var(--b2);background:transparent;color:var(--t2);transition:all .15s;">
+          $ Change
+        </button>
+        <button onclick="setWlSort('signal')" id="sort-sig"
+          style="padding:4px 10px;border-radius:20px;font-family:var(--mono);font-size:10px;cursor:pointer;border:1px solid var(--b2);background:transparent;color:var(--t2);transition:all .15s;">
+          📊 Signal
+        </button>
+      </div>
       <div class="wl-table" id="wlTable">
         <div class="wl-empty-msg">
           No stocks tracked yet.<br>
@@ -1965,13 +1985,50 @@ function renderWatchlist() {
   const runAllBtn = document.getElementById('runAllBtn');
   if (runAllBtn) runAllBtn.style.display = watchlist.length > 0 ? 'block' : 'none';
 
+  // Show/hide sort bar
+  const sortBar = document.getElementById('wlSortBar');
+  if (sortBar) sortBar.style.display = watchlist.length > 1 ? 'flex' : 'none';
+
+  // Highlight active sort button
+  ['date','change_pct','change_val','signal'].forEach(f => {
+    const btn = document.getElementById('sort-' + f);
+    if (!btn) return;
+    const active = wlSortBy === f;
+    btn.style.background = active ? 'var(--blue)' : 'transparent';
+    btn.style.color = active ? 'var(--bg)' : 'var(--t2)';
+    btn.style.borderColor = active ? 'var(--blue)' : 'var(--b2)';
+    btn.textContent = (f==='date'?'📅 Date Added':f==='change_pct'?'% Change':f==='change_val'?'$ Change':'📊 Signal') + (active ? (wlSortDir===-1?' ↓':' ↑') : '');
+  });
+
+  // Sort watchlist
+  const sorted = [...watchlist].sort((a, b) => {
+    if (wlSortBy === 'change_pct') {
+      const av = a.liveChange ?? -999, bv = b.liveChange ?? -999;
+      return (bv - av) * wlSortDir;
+    }
+    if (wlSortBy === 'change_val') {
+      const ap = (a.livePrice||0), bp = (b.livePrice||0);
+      const apc = a.data?.current_price ? parseFloat(a.data.current_price.replace(/[^0-9.]/g,'')) : 0;
+      const bpc = b.data?.current_price ? parseFloat(b.data.current_price.replace(/[^0-9.]/g,'')) : 0;
+      const av = (ap - apc) * (a.liveChange > 0 ? 1 : -1);
+      const bv = (bp - bpc) * (b.liveChange > 0 ? 1 : -1);
+      return (bv - av) * wlSortDir;
+    }
+    if (wlSortBy === 'signal') {
+      const order = {BULLISH:0, NEUTRAL:1, BEARISH:2};
+      return ((order[a.signal]??1) - (order[b.signal]??1)) * wlSortDir;
+    }
+    // Default: date added (newest first)
+    return (new Date(b.date||0) - new Date(a.date||0)) * wlSortDir;
+  });
+
   const tbl = document.getElementById('wlTable');
   if (watchlist.length === 0) {
     tbl.innerHTML = '<div class="wl-empty-msg">No stocks tracked yet.<br>Analyze a ticker and press <b style="color:var(--green)">+ Track</b> to add it here.</div>';
     return;
   }
 
-  tbl.innerHTML = watchlist.map(w => {
+  tbl.innerHTML = sorted.map(w => {
     const sc = sc2cls(w.signal);
     const sigBadge = sc==='bull'?'bg':sc==='bear'?'br':'by';
     return `
@@ -2614,6 +2671,15 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
 
 // ── Portfolio ──────────────────────────────────────────────────
 // ── Accuracy Calibration System ──────────────────────────────
+let wlSortBy = 'date'; // 'date' | 'change_pct' | 'change_val'
+let wlSortDir = -1; // -1 = desc, 1 = asc
+
+function setWlSort(field) {
+  if (wlSortBy === field) wlSortDir *= -1;
+  else { wlSortBy = field; wlSortDir = -1; }
+  renderWatchlist();
+}
+
 let forecastHistory = JSON.parse(localStorage.getItem('so_forecast_history') || '[]');
 
 // Auto-check forecasts on page load (once per day)
