@@ -521,7 +521,8 @@ function toggleTheme() {
 })();
 
 // Render watchlist only when wlTable exists
-if (document.getElementById('wlTable')) renderWatchlist();
+// Always render watchlist on init even if hidden — data will show when navigated to
+renderWatchlist();
 // Auto-check forecasts after short delay
 setTimeout(autoCheckForecasts, 2000);
 
@@ -540,10 +541,8 @@ function goTo(page) {
   toggleDrawer();
   if (page === 'portfolio') renderPortfolio();
   if (page === 'watchlist') {
-    setTimeout(() => {
-      renderWatchlist();
-      refreshWatchlistPrices();
-    }, 50);
+    renderWatchlist();
+    refreshWatchlistPrices();
   }
 }
 
@@ -1997,6 +1996,30 @@ async function refreshWatchlistPrices() {
   localStorage.setItem('so_wl2', JSON.stringify(watchlist));
 }
 
+function forceRenderWatchlist() {
+  const tbl = document.getElementById('wlTable');
+  if (!tbl || !watchlist.length) return;
+  tbl.innerHTML = watchlist.map(function(w) {
+    const sc = sc2cls(w.signal||'NEUTRAL');
+    const sigBadge = sc==='bull'?'bg':sc==='bear'?'br':'by';
+    const ticker = w.ticker || '?';
+    return '<div style="padding:12px 14px;border-bottom:1px solid var(--b1);">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+        '<div style="display:flex;align-items:center;gap:10px;">' +
+          '<span data-ticker="' + ticker + '" onclick="goAnalyze(this.dataset.ticker)" style="font-family:var(--mono);font-size:15px;font-weight:700;color:var(--blue);cursor:pointer;">' + ticker + '</span>' +
+          '<span style="font-size:11px;color:var(--t3);">' + (w.company||'') + '</span>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;">' +
+          '<span class="badge ' + sigBadge + '" style="font-size:9px;">' + (w.signal||'') + '</span>' +
+          '<button data-ticker="' + ticker + '" onclick="checkAccuracy(this.dataset.ticker)" class="btn-acc">⚡ Check</button>' +
+          '<button data-ticker="' + ticker + '" onclick="removeFromWatchlist(this.dataset.ticker)" style="background:rgba(255,68,102,.1);border:1px solid rgba(255,68,102,.25);color:var(--red);cursor:pointer;font-size:10px;padding:4px 10px;border-radius:6px;font-family:var(--mono);">✕</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="acc-result-' + ticker + '" style="display:none;padding:8px 0 0;"></div>' +
+    '</div>';
+  }).join('');
+}
+
 function renderWatchlist() {
   document.getElementById('wlBadge').textContent = watchlist.length;
   document.getElementById('wlSubtitle').textContent = watchlist.length + ' stock' + (watchlist.length !== 1 ? 's' : '') + ' tracked';
@@ -2050,9 +2073,11 @@ function renderWatchlist() {
   // Emergency: if sorted empty but watchlist has items, use watchlist directly
   const displayList = (sorted.length > 0) ? sorted : 
                       (watchlist.length > 0 ? [...watchlist] : []);
-  
+
   if (displayList.length === 0) {
-    tbl.innerHTML = '<div class="wl-empty-msg">No stocks tracked yet.<br>Analyze a ticker and press <b style="color:var(--green)">+ Track</b> to add it here.</div>';
+    tbl.innerHTML = watchlist.length > 0
+      ? '<div style="padding:20px;text-align:center;"><div style="font-family:var(--mono);font-size:11px;color:var(--red);margin-bottom:8px;">⚠️ Render error — ' + watchlist.length + ' items in memory</div><button onclick="forceRenderWatchlist()" style="background:var(--green);color:var(--bg);border:none;padding:8px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;">Force Render</button></div>'
+      : '<div class="wl-empty-msg">No stocks tracked yet.<br>Analyze a ticker and press <b style="color:var(--green)">+ Track</b> to add it here.</div>';
     return;
   }
 
