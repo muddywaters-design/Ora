@@ -1997,9 +1997,16 @@ async function refreshWatchlistPrices() {
 }
 
 function forceRenderWatchlist() {
+  // Read fresh from localStorage
+  let wl = [];
+  try { wl = JSON.parse(localStorage.getItem('so_wl2') || '[]'); } catch(e) {}
+  if (!wl.length) return;
+  // Sync global variable
+  watchlist.length = 0;
+  wl.forEach(function(w) { watchlist.push(w); });
   const tbl = document.getElementById('wlTable');
-  if (!tbl || !watchlist.length) return;
-  tbl.innerHTML = watchlist.map(function(w) {
+  if (!tbl) return;
+  tbl.innerHTML = wl.map(function(w) {
     const sc = sc2cls(w.signal||'NEUTRAL');
     const sigBadge = sc==='bull'?'bg':sc==='bear'?'br':'by';
     const ticker = w.ticker || '?';
@@ -2021,6 +2028,18 @@ function forceRenderWatchlist() {
 }
 
 function renderWatchlist() {
+  // Always read fresh from localStorage to avoid stale variable
+  try {
+    const raw = localStorage.getItem('so_wl2');
+    if (raw) {
+      const fresh = JSON.parse(raw);
+      if (fresh.length > 0 && watchlist.length === 0) {
+        // Repopulate the global variable
+        fresh.forEach(function(w) { watchlist.push(w); });
+      }
+    }
+  } catch(e) {}
+
   document.getElementById('wlBadge').textContent = watchlist.length;
   document.getElementById('wlSubtitle').textContent = watchlist.length + ' stock' + (watchlist.length !== 1 ? 's' : '') + ' tracked';
   const runAllBtn = document.getElementById('runAllBtn');
