@@ -407,6 +407,13 @@ body.light .live-label { color: var(--green); }
         </div>
       </div>
       <div id="accDashboard"></div>
+      <!-- Debug button - temporary -->
+      <div id="wlDebug" style="margin-bottom:8px;">
+        <button onclick="wlDebugCheck()" style="background:var(--s2);border:1px solid var(--b1);color:var(--t2);padding:8px 14px;border-radius:8px;font-family:var(--mono);font-size:10px;cursor:pointer;width:100%;">
+          🔍 Debug: Check Data
+        </button>
+        <div id="wlDebugResult" style="margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--t2);padding:8px;background:var(--s2);border-radius:6px;display:none;word-break:break-all;"></div>
+      </div>
       <!-- Sort bar -->
       <div id="wlSortBar" style="display:none;padding:8px 14px;background:var(--s2);border:1px solid var(--b1);border-radius:10px;margin-bottom:8px;align-items:center;gap:6px;flex-wrap:wrap;">
         <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;">Sort by:</span>
@@ -2694,6 +2701,44 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
 // ── Accuracy Calibration System ──────────────────────────────
 let wlSortBy = 'date'; // 'date' | 'change_pct' | 'change_val'
 let wlSortDir = -1; // -1 = desc, 1 = asc
+
+function wlDebugCheck() {
+  const res = document.getElementById('wlDebugResult');
+  if (!res) return;
+  res.style.display = 'block';
+  const raw = localStorage.getItem('so_wl2');
+  const wlLen = watchlist ? watchlist.length : 'undefined';
+  
+  let info = 'watchlist var: ' + wlLen + ' items\n';
+  info += 'localStorage so_wl2: ' + (raw ? raw.length + ' chars' : 'NULL') + '\n';
+  
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      info += 'Parsed OK: ' + parsed.length + ' items\n';
+      if (parsed[0]) info += 'First: ' + parsed[0].ticker + ' / ' + parsed[0].signal;
+    } catch(e) {
+      info += 'PARSE ERROR: ' + e.message;
+    }
+  }
+  
+  // Try to force render
+  if (watchlist && watchlist.length > 0) {
+    const tbl = document.getElementById('wlTable');
+    if (tbl) {
+      info += '\nForcing render...';
+      tbl.innerHTML = watchlist.map(w => 
+        '<div style="padding:10px;border-bottom:1px solid var(--b1);">' +
+        '<b style="color:var(--blue)">' + (w.ticker||'?') + '</b> ' +
+        (w.company||'') + ' - ' + (w.signal||'?') +
+        '</div>'
+      ).join('');
+      info += ' Done!';
+    }
+  }
+  
+  res.textContent = info;
+}
 
 function setWlSort(field) {
   if (wlSortBy === field) wlSortDir *= -1;
