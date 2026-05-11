@@ -408,7 +408,7 @@ body.light .live-label { color: var(--green); }
       </div>
       <div id="accDashboard"></div>
       <!-- Sort bar -->
-      <div id="wlSortBar" style="display:none;padding:8px 14px;background:var(--s2);border:1px solid var(--b1);border-radius:10px;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+      <div id="wlSortBar" style="display:none;padding:8px 14px;background:var(--s2);border:1px solid var(--b1);border-radius:10px;margin-bottom:8px;align-items:center;gap:6px;flex-wrap:wrap;">
         <span style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;">Sort by:</span>
         <button onclick="setWlSort('date')" id="sort-date"
           style="padding:4px 10px;border-radius:20px;font-family:var(--mono);font-size:10px;cursor:pointer;border:1px solid var(--b2);background:transparent;color:var(--t2);transition:all .15s;">
@@ -439,7 +439,15 @@ body.light .live-label { color: var(--green); }
 
 <script>
 // ── State ──────────────────────────────────────────────────────
-let watchlist = JSON.parse(localStorage.getItem('so_wl2') || '[]');
+let watchlist = (() => {
+  try {
+    const raw = localStorage.getItem('so_wl2');
+    return raw ? JSON.parse(raw) : [];
+  } catch(e) {
+    console.warn('Watchlist parse error:', e);
+    return [];
+  }
+})();
 let currentTicker = '';
 let currentResult = null;
 
@@ -2758,14 +2766,49 @@ function getCalibrationFactor(timeframe) {
   return accuracy < 0.5 ? 0.85 : accuracy > 0.7 ? 1.1 : 1.0;
 }
 
-let portfolio = JSON.parse(localStorage.getItem('so_portfolio') || '{"budget":10000,"positions":[]}');
-// Deduplicate positions by id (fix any existing duplicates)
-portfolio.positions = portfolio.positions.filter((p,i,arr) => arr.findIndex(x=>x.id===p.id)===i);
-savePortfolio();
+let portfolio = (() => {
+  try {
+    const raw = localStorage.getItem('so_portfolio');
+    if (!raw) return {"budget":10000,"positions":[]};
+    const parsed = JSON.parse(raw);
+    // Deduplicate without saving immediately
+    if (parsed.positions) {
+      parsed.positions = parsed.positions.filter((p,i,arr) => arr.findIndex(x=>x.id===p.id)===i);
+    }
+    return parsed;
+  } catch(e) {
+    console.warn('Portfolio parse error:', e);
+    return {"budget":10000,"positions":[]};
+  }
+})();
 
 function savePortfolio() {
   localStorage.setItem('so_portfolio', JSON.stringify(portfolio));
 }
+
+// Data recovery: call recoverData() in browser console if data appears missing
+window.recoverData = function() {
+  const wl = localStorage.getItem('so_wl2');
+  const pf = localStorage.getItem('so_portfolio');
+  console.log('=== StockOracle Data Recovery ===');
+  console.log('Watchlist raw:', wl);
+  console.log('Portfolio raw:', pf);
+  if (wl) {
+    try {
+      const w = JSON.parse(wl);
+      console.log('Watchlist items:', w.length);
+      w.forEach(s => console.log(' -', s.ticker, s.company));
+    } catch(e) { console.error('Watchlist corrupted:', e); }
+  }
+  if (pf) {
+    try {
+      const p = JSON.parse(pf);
+      console.log('Portfolio positions:', p.positions?.length || 0);
+      p.positions?.forEach(s => console.log(' -', s.ticker, s.shares, 'shares'));
+    } catch(e) { console.error('Portfolio corrupted:', e); }
+  }
+  return { watchlist: wl, portfolio: pf };
+};
 
 function goPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
