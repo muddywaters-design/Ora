@@ -446,6 +446,8 @@ body.light .live-label { color: var(--green); }
 
 <script>
 // ── State ──────────────────────────────────────────────────────
+let wlSortBy = 'date';
+let wlSortDir = -1;
 let watchlist = (() => {
   try {
     const raw = localStorage.getItem('so_wl2');
@@ -559,7 +561,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
-    system: 'You are StockOracle, an elite quant analyst. Output valid JSON only. IMPORTANT: Focus on forecasting DIRECTION (UP/DOWN/SIDEWAYS) with WIDE probability ranges rather than precise percentages. A correct direction call is more valuable than a precise number. Think: technicals → fundamentals → microstructure → macro → catalysts → direction + magnitude. Use wide ranges (e.g. +5% to +30%) that capture realistic outcomes. Confidence >70% only when 4+ signals agree. Always include bull/bear scenarios. Search for latest news before forecasting.',
+    system: 'You are StockOracle, an elite quant analyst. Output valid JSON only. CRITICAL PROCESS: (1) Search latest news first. (2) Analyze all signals. (3) DEVIL\'S ADVOCATE — actively argue WHY your forecast could be WRONG before finalizing it. (4) Only after challenging your own thesis, give the final forecast. DIRECTION over precision: forecast UP/DOWN/SIDEWAYS with wide ranges (+5% to +40%). Confidence >70% only when 4+ signals agree AND devil\'s advocate fails to find major flaws. FEW-SHOT CALIBRATION: Stocks near 52W high with high RSI often pull back 10-20% before resuming. Stocks with unusual volume spikes 3x+ often move 15-30% in the direction of the spike within 2 weeks. Earnings beats with rising guidance = bullish for 1-3 months. Always include bull/bear scenarios with specific price triggers.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -690,12 +692,67 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
 
   // Sector rotation signal
+  // === Relative Strength Signal ===
+  const rsCtx = (() => {
+    try {
+      const diff = parseFloat(liveData?.sectorRelative || '0');
+      const etf  = liveData?.sectorETF || 'sector';
+      if (Math.abs(diff) < 1) return '';
+      // RS rank
+      if (diff > 10) return `STRONG_RS:+${diff}%vs${etf}-top_performer.`;
+      if (diff > 3)  return `OUTPERFORMING:+${diff}%vs${etf}.`;
+      if (diff < -10) return `WEAK_RS:${diff}%vs${etf}-lagging_badly.`;
+      if (diff < -3)  return `UNDERPERFORMING:${diff}%vs${etf}.`;
+      return '';
+    } catch(_) { return ''; }
+  })();
+
   const sectorRotCtx = (() => {
     if (!liveData?.sectorRelative || liveData.sectorRelative === '—') return '';
     const diff = parseFloat(liveData.sectorRelative);
     if (diff < -5) return `SECTOR ROTATION WARNING: ${liveData.sectorETF} underperforming by ${diff}% — money flowing OUT of sector.`;
     if (diff > 5) return `SECTOR INFLOW: ${liveData.sectorETF} outperforming by +${diff}% — money flowing INTO sector.`;
     return '';
+  })();
+
+  // === Market Regime Detection ===
+  const regimeCtx = (() => {
+    try {
+      const rsi = parseFloat(liveData?.rsi || '50');
+      const pos52 = parseFloat(liveData?.weekPos52 || '50');
+      const sectorRel = parseFloat(liveData?.sectorRelative || '0');
+      const macdVal = parseFloat(liveData?.macd || '0');
+      const macdSig = parseFloat(liveData?.macdSignal || '0');
+      const bullSignals = [
+        rsi > 50 && rsi < 70,
+        pos52 > 40,
+        sectorRel > -2,
+        macdVal > macdSig,
+      ].filter(Boolean).length;
+      const regime = bullSignals >= 3 ? 'BULL_REGIME' : bullSignals <= 1 ? 'BEAR_REGIME' : 'SIDEWAYS_REGIME';
+      return regime === 'BULL_REGIME' ? 'Regime:BULLISH-momentum/breadth supportive.' :
+             regime === 'BEAR_REGIME' ? 'Regime:BEARISH-reduce bullish confidence.' :
+             'Regime:SIDEWAYS-range-bound/lower conviction.';
+    } catch(_) { return ''; }
+  })();
+
+  // === Moving Average Detection ===
+  const maCtx = (() => {
+    try {
+      const closes = liveData?._closes || [];
+      if (closes.length < 20) return '';
+      const ma20 = closes.slice(-20).reduce((a,b)=>a+b,0) / 20;
+      const ma50 = closes.length >= 50 ? closes.slice(-50).reduce((a,b)=>a+b,0) / 50 : null;
+      const ma200 = closes.length >= 200 ? closes.slice(-200).reduce((a,b)=>a+b,0) / 200 : null;
+      const price = closes[closes.length-1];
+      const sigs = [];
+      if (price > ma20) sigs.push('P>MA20');
+      if (ma50 && price > ma50) sigs.push('P>MA50');
+      if (ma50 && ma20 > ma50) sigs.push('MA20>MA50-bullish');
+      if (ma50 && ma200 && ma50 > ma200) sigs.push('GoldenCross');
+      if (ma50 && ma200 && ma50 < ma200) sigs.push('DeathCross');
+      return sigs.length ? 'MAs:' + sigs.join(',') + '.' : '';
+    } catch(_) { return ''; }
   })();
 
   const breakoutCtx = (() => {
@@ -708,7 +765,8 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     if (parseFloat(pL)<6) return `Near52WLow(+${pL}%fromLow).`;
     return '';
   })();
-  return `${d}. Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx}
+  const multiTfNote = 'MULTI-TIMEFRAME RULE: 1-week forecast must align with daily momentum. 1-month must align with weekly trend. Lower confidence if timeframes conflict.';
+  return `${d}. ${multiTfNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
@@ -1129,6 +1187,7 @@ async function fetchLivePrice(ticker) {
       return {
         price: price.toFixed(2), change, changePct,
         prevClose: prev ? prev.toFixed(2) : null,
+        _closes: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [],
         high52:    high52 || '—',
         low52:     low52  || '—',
         marketCap: marketCap ? formatMarketCap(marketCap) : '—',
@@ -2756,9 +2815,6 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
 
 // ── Portfolio ──────────────────────────────────────────────────
 // ── Accuracy Calibration System ──────────────────────────────
-let wlSortBy = 'date'; // 'date' | 'change_pct' | 'change_val'
-let wlSortDir = -1; // -1 = desc, 1 = asc
-
 function wlDebugCheck() {
   const res = document.getElementById('wlDebugResult');
   if (!res) return;
