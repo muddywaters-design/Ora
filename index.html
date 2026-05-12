@@ -603,7 +603,12 @@ async function toJSONEnsemble(prompt, useSearch) {
     }
   }
 
-  if (parsed.length === 0) throw new Error('All ensemble calls failed');
+  if (parsed.length === 0) {
+    // Get the actual error from the first failed call
+    const firstErr = results.find(r => r.status === 'rejected');
+    const errMsg = firstErr?.reason?.message || 'API call failed';
+    throw new Error(errMsg);
+  }
   if (parsed.length === 1) return JSON.stringify(parsed[0]);
 
   // Use first result as base, average confidence scores and directions
@@ -765,7 +770,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     if (parseFloat(pL)<6) return `Near52WLow(+${pL}%fromLow).`;
     return '';
   })();
-  const multiTfNote = 'MULTI-TIMEFRAME RULE: 1-week forecast must align with daily momentum. 1-month must align with weekly trend. Lower confidence if timeframes conflict.';
+  const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
   return `${d}. ${multiTfNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
@@ -1591,7 +1596,13 @@ async function runAnalysis(sym) {
     document.getElementById('liveLabel').textContent = 'LIVE';
   } catch (e) {
     clearInterval(iv);
-    document.getElementById('analyzeContent').innerHTML = `<div class="err-box">⚠️ ${e.message}</div>`;
+    clearInterval(window._elapsedInterval);
+    const errMsg = e.message || 'Unknown error';
+    const isRate  = errMsg.includes('rate limit') || errMsg.includes('529') || errMsg.includes('overloaded') || errMsg.includes('30,000');
+    const isAuth  = errMsg.includes('401') || errMsg.includes('api key') || errMsg.includes('authentication');
+    const hint = isRate  ? '<br><span style="font-size:11px;color:var(--yellow);">⏱ Rate limit hit — wait 30 seconds and try again, or check billing at console.anthropic.com</span>' :
+                 isAuth  ? '<br><span style="font-size:11px;color:var(--yellow);">🔑 API key issue — check your key has credits</span>' : '';
+    document.getElementById('analyzeContent').innerHTML = `<div class="err-box">⚠️ ${errMsg}${hint}<br><button onclick="runAnalysis(document.getElementById('tickerInput').value)" style="margin-top:8px;background:var(--blue);color:var(--bg);border:none;padding:6px 14px;border-radius:6px;font-family:var(--mono);font-size:10px;cursor:pointer;">↺ Retry</button></div>`;
     document.getElementById('liveLabel').textContent = 'ERROR';
   } finally {
     document.getElementById('runBtn').disabled = false;
