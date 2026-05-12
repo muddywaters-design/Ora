@@ -2094,9 +2094,14 @@ function renderWatchlist() {
                       (watchlist.length > 0 ? [...watchlist] : []);
 
   if (displayList.length === 0) {
-    tbl.innerHTML = watchlist.length > 0
-      ? '<div style="padding:20px;text-align:center;"><div style="font-family:var(--mono);font-size:11px;color:var(--red);margin-bottom:8px;">⚠️ Render error — ' + watchlist.length + ' items in memory</div><button onclick="forceRenderWatchlist()" style="background:var(--green);color:var(--bg);border:none;padding:8px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;">Force Render</button></div>'
-      : '<div class="wl-empty-msg">No stocks tracked yet.<br>Analyze a ticker and press <b style="color:var(--green)">+ Track</b> to add it here.</div>';
+    // Show what's actually in localStorage
+    var rawStorage = '';
+    try { rawStorage = localStorage.getItem('so_wl2') || 'NULL'; } catch(e) { rawStorage = 'ERROR: ' + e.message; }
+    var storageLen = rawStorage === 'NULL' ? 0 : rawStorage.length;
+    tbl.innerHTML = '<div style="padding:16px;">' +
+      '<div style="font-family:var(--mono);font-size:10px;color:var(--red);margin-bottom:10px;">watchlist var: ' + watchlist.length + ' | localStorage: ' + storageLen + ' chars</div>' +
+      (storageLen > 0 ? '<button onclick="forceRenderWatchlist()" style="background:var(--green);color:var(--bg);border:none;padding:10px 20px;border-radius:8px;font-family:var(--mono);font-size:12px;font-weight:700;cursor:pointer;width:100%;">▶ Force Render (' + storageLen + ' chars)</button>' : '<div class="wl-empty-msg">No stocks tracked yet.<br>Add stocks via + Track</div>') +
+      '</div>';
     return;
   }
 
