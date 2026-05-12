@@ -268,6 +268,10 @@ body.light .live-label { color: var(--green); }
       onmouseover="this.style.borderColor='var(--t2)'" onmouseout="this.style.borderColor='var(--b2)'">
       ☀️
     </button>
+    <button id="searchBtn" onclick="toggleWebSearch()" title="Toggle web search (slower but more accurate)"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;">
+      🌐 ON
+    </button>
     <div class="live-pill">
       <div class="live-dot"></div>
       <span class="live-label" id="liveLabel">LIVE</span>
@@ -504,6 +508,28 @@ function getApiKey() {
 }
 
 loadApiKey();
+// ── Web Search Toggle ─────────────────────────────────────────
+let useWebSearch = localStorage.getItem('so_websearch') !== 'off';
+
+function toggleWebSearch() {
+  useWebSearch = !useWebSearch;
+  localStorage.setItem('so_websearch', useWebSearch ? 'on' : 'off');
+  const btn = document.getElementById('searchBtn');
+  if (btn) {
+    btn.textContent = '🌐 ' + (useWebSearch ? 'ON' : 'OFF');
+    btn.style.color = useWebSearch ? 'var(--green)' : 'var(--t3)';
+    btn.style.borderColor = useWebSearch ? 'var(--green)' : 'var(--b2)';
+  }
+}
+
+// Apply saved web search state
+(function() {
+  if (!useWebSearch) {
+    const btn = document.getElementById('searchBtn');
+    if (btn) { btn.textContent = '🌐 OFF'; btn.style.color = 'var(--t3)'; btn.style.borderColor = 'var(--b2)'; }
+  }
+})();
+
 // ── Theme Toggle ──────────────────────────────────────────────
 function toggleTheme() {
   const isLight = document.body.classList.toggle('light');
@@ -1489,7 +1515,7 @@ async function runAnalysis(sym) {
       if (loading) loading.appendChild(warn);
     }
     if(window._advanceStep) window._advanceStep(); // Step: Running AI
-    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData), true);
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData), useWebSearch);
     if(window._advanceStep) window._advanceStep(); // Step: Building report
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
