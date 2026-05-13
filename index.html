@@ -1602,14 +1602,8 @@ async function runAnalysis(sym) {
         } catch(_) {}
       }
     }
-    if (!liveData) {
-      const warn = document.createElement('div');
-      warn.id = 'live-warn';
-      warn.style.cssText = 'background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.2);border-radius:8px;padding:10px 14px;margin:8px 20px;font-size:11px;color:var(--yellow);text-align:center;';
-      warn.innerHTML = '⚠️ Live price unavailable for this ticker — AI analysis only.';
-      const loading = document.querySelector('.loading');
-      if (loading) loading.appendChild(warn);
-    }
+    // Live data status — only show warning AFTER analysis, not during loading
+    // (The post-analysis warning handles this if needed)
     if(window._advanceStep) window._advanceStep(); // Step: Running AI
     const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData), useWebSearch);
     if(window._advanceStep) window._advanceStep(); // Step: Building report
@@ -1855,10 +1849,12 @@ function renderAnalysis(ticker, d) {
     </div>
 
     ${(()=>{
-      if (d.live_change === undefined) {
-        return `<div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.2);border-radius:10px;padding:9px 14px;font-size:11px;color:var(--yellow);display:flex;align-items:center;justify-content:space-between;gap:8px;">
-  <span>⚠️ Live price unavailable — proxies may be rate-limited. Analysis uses AI estimates.</span>
-  <button onclick="runAnalysis(document.getElementById('tickerInput').value)" style="background:rgba(255,208,96,.2);border:1px solid rgba(255,208,96,.4);color:var(--yellow);padding:4px 10px;border-radius:6px;font-family:var(--mono);font-size:9px;cursor:pointer;flex-shrink:0;">↺ Retry</button>
+      // Only show warning if we truly have no live data (no price AND no change)
+      const hasNoLiveData = d.live_change === undefined && !d.live_price;
+      if (hasNoLiveData) {
+        return `<div style="background:rgba(255,208,96,.06);border:1px solid rgba(255,208,96,.15);border-radius:10px;padding:8px 14px;font-size:10px;color:var(--yellow);display:flex;align-items:center;justify-content:space-between;gap:8px;">
+  <span>ℹ️ Using AI price estimate — live data unavailable</span>
+  <button onclick="runAnalysis(document.getElementById('tickerInput').value)" style="background:rgba(255,208,96,.2);border:1px solid rgba(255,208,96,.4);color:var(--yellow);padding:3px 8px;border-radius:5px;font-family:var(--mono);font-size:9px;cursor:pointer;flex-shrink:0;">↺ Retry</button>
 </div>`;
       }
       let html = `<div style="background:var(--s1);border:1px solid rgba(0,229,160,.2);border-radius:10px;padding:10px 16px;">
