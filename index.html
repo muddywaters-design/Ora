@@ -262,22 +262,22 @@ body.light .live-label { color: var(--green); }
     <div class="logo-box">SO</div>
     <div class="logo-name">Stock<span>Oracle</span> Pro</div>
   </div>
-  <div style="display:flex;align-items:center;gap:8px;">
+  <div style="display:flex;align-items:center;gap:6px;overflow-x:auto;min-width:0;flex-shrink:1;-webkit-overflow-scrolling:touch;">
     <button id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark mode"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;"
       onmouseover="this.style.borderColor='var(--t2)'" onmouseout="this.style.borderColor='var(--b2)'">
       ☀️
     </button>
     <button id="searchBtn" onclick="toggleWebSearch()" title="Toggle web search"
-      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;">
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
       🌐 ON
     </button>
     <button onclick="showFinnhubSetup()" title="Configure Finnhub API for reliable prices"
-      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;" id="finnhubBtn">
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;" id="finnhubBtn">
       📈 <span id="finnhubLabel">PRICES</span>
     </button>
     <button id="convictionBtn" onclick="toggleConviction()" title="High conviction mode — only shows trades >55% confidence"
-      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;">
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
       🎯 ALL
     </button>
     <div class="live-pill">
@@ -1144,6 +1144,13 @@ async function fetchExchangeRate(from, to) {
 // ── Live price fetcher ────────────────────────────────────────
 // Tries Yahoo Finance directly (works from browser, not from Claude.ai)
 async function fetchLivePrice(ticker) {
+  // If Finnhub key is set, try it FIRST (faster, no CORS proxies needed)
+  if (typeof finnhubKey !== 'undefined' && finnhubKey) {
+    try {
+      const finnhubData = await fetchFinnhubPrice(ticker);
+      if (finnhubData?.price) return finnhubData;
+    } catch(_) {}
+  }
   const proxies = [
     `https://corsproxy.io/?`,
     `https://api.allorigins.win/raw?url=`,
