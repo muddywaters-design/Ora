@@ -268,9 +268,13 @@ body.light .live-label { color: var(--green); }
       onmouseover="this.style.borderColor='var(--t2)'" onmouseout="this.style.borderColor='var(--b2)'">
       ☀️
     </button>
-    <button id="searchBtn" onclick="toggleWebSearch()" title="Toggle web search (slower but more accurate)"
+    <button id="searchBtn" onclick="toggleWebSearch()" title="Toggle web search"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;">
       🌐 ON
+    </button>
+    <button id="convictionBtn" onclick="toggleConviction()" title="High conviction mode — only shows trades >55% confidence"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;">
+      🎯 ALL
     </button>
     <div class="live-pill">
       <div class="live-dot"></div>
@@ -522,6 +526,30 @@ function toggleWebSearch() {
   }
 }
 
+let highConvictionMode = localStorage.getItem('so_conviction') === 'on';
+function toggleConviction() {
+  highConvictionMode = !highConvictionMode;
+  localStorage.setItem('so_conviction', highConvictionMode ? 'on' : 'off');
+  const btn = document.getElementById('convictionBtn');
+  if (btn) {
+    btn.textContent = highConvictionMode ? '🎯 HIGH' : '🎯 ALL';
+    btn.style.color = highConvictionMode ? 'var(--green)' : 'var(--t2)';
+    btn.style.borderColor = highConvictionMode ? 'var(--green)' : 'var(--b2)';
+  }
+  // Re-render if analysis is showing
+  if (window.currentParsed) renderAnalysis(window.currentTicker, window.currentParsed);
+}
+
+// Apply saved conviction state on load
+setTimeout(() => {
+  const btn = document.getElementById('convictionBtn');
+  if (btn && highConvictionMode) {
+    btn.textContent = '🎯 HIGH';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'var(--green)';
+  }
+}, 100);
+
 // Apply saved web search state
 (function() {
   if (!useWebSearch) {
@@ -587,7 +615,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
-    system: 'You are StockOracle, an elite quant analyst. Output valid JSON only. CRITICAL PROCESS: (1) Search latest news first. (2) Analyze all signals. (3) DEVIL\'S ADVOCATE — actively argue WHY your forecast could be WRONG before finalizing it. (4) Only after challenging your own thesis, give the final forecast. DIRECTION over precision: forecast UP/DOWN/SIDEWAYS with wide ranges (+5% to +40%). Confidence >70% only when 4+ signals agree AND devil\'s advocate fails to find major flaws. FEW-SHOT CALIBRATION: Stocks near 52W high with high RSI often pull back 10-20% before resuming. Stocks with unusual volume spikes 3x+ often move 15-30% in the direction of the spike within 2 weeks. Earnings beats with rising guidance = bullish for 1-3 months. Always include bull/bear scenarios with specific price triggers.',
+    system: 'You are StockOracle, an elite quant analyst. Output valid JSON only. METHODOLOGY: (1) Search latest news. (2) Analyze technicals+fundamentals+microstructure+macro. (3) DEVIL\'S ADVOCATE: argue why forecast could be WRONG. (4) Provide PROBABILITY DISTRIBUTION for each timeframe: prob_up%, prob_flat%, prob_down% (must sum to 100). (5) Direction = highest probability. CALIBRATION: Confidence >70% only when 4+ signals agree AND devil\'s advocate fails. NO_TRADE if best probability <50%. FEW-SHOT: Stocks near 52W high with high RSI often pull back 10-20%. Volume spikes 3x+ often = 15-30% move in spike direction within 2 weeks. Earnings beats with rising guidance = bullish 1-3 months. High VIX/yields = penalty on bullish. Strong sector + strong RS = boost confidence. Always include bull/bear scenarios with specific price triggers.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -692,7 +720,7 @@ function extractJSON(raw) {
 }
 
 // ── Prompts ────────────────────────────────────────────────────
-function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, shortData, optionsData) {
+function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData) {
   const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const price = liveData?.price ? `Current price: $${liveData.price} (${liveData.change>=0?'+':''}${liveData.change}, ${liveData.changePct}%). 52W: $${liveData.low52}-$${liveData.high52}. Vol: ${liveData.volume}. MCap: ${liveData.marketCap}. PE: ${liveData.pe}. Target: ${liveData.targetPrice}.` : '';
   const techs = liveData?.rsi && liveData.rsi!=='—' ? `RSI(14):${liveData.rsi} MACD:${liveData.macd} Signal:${liveData.macdSignal} BB:${liveData.bb_lower}-${liveData.bb_mid}-${liveData.bb_upper} Put/Call:${liveData.putCallRatio}.` : '';
@@ -723,6 +751,10 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
 
   // Sector rotation signal
+  // === Macro environment ===
+  const macroCtx = macroData?.summary || '';
+  // High VIX/yields = penalty on bullish; risk-off = lower confidence
+
   // === Relative Strength Signal ===
   const rsCtx = (() => {
     try {
@@ -809,12 +841,75 @@ function mkJSONPrompt(ticker, research) {
 
 ${research.slice(0, 1500)}
 
-{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"UP","magnitude":"MODERATE","range_low":"+2%","range_high":"+12%","confidence":68,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"month":{"direction":"UP","magnitude":"STRONG","range_low":"+5%","range_high":"+25%","confidence":62,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"half_year":{"direction":"UP","magnitude":"MODERATE","range_low":"+8%","range_high":"+40%","confidence":52,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"year":{"direction":"UP","magnitude":"STRONG","range_low":"+15%","range_high":"+60%","confidence":44,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
+{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"UP","magnitude":"MODERATE","range_low":"+2%","range_high":"+12%","prob_up":60,"prob_flat":25,"prob_down":15,"confidence":68,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"month":{"direction":"UP","magnitude":"STRONG","range_low":"+5%","range_high":"+25%","prob_up":55,"prob_flat":25,"prob_down":20,"confidence":62,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"half_year":{"direction":"UP","magnitude":"MODERATE","range_low":"+8%","range_high":"+40%","prob_up":50,"prob_flat":25,"prob_down":25,"confidence":52,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"year":{"direction":"UP","magnitude":"STRONG","range_low":"+15%","range_high":"+60%","prob_up":45,"prob_flat":30,"prob_down":25,"confidence":44,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
 }
 
 
 
 
+
+// ── Macro Data (VIX, Treasury yields, DXY) ────────────────────
+async function fetchMacroData() {
+  const symbols = {
+    vix:  '%5EVIX',   // VIX volatility index
+    tnx:  '%5ETNX',   // 10-year Treasury yield
+    dxy:  'DX-Y.NYB', // Dollar index
+    spy:  'SPY',      // S&P 500
+  };
+  const results = {};
+  await Promise.all(Object.entries(symbols).map(async ([key, sym]) => {
+    try {
+      const url = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=5d`;
+      const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
+      for (const proxy of proxies) {
+        try {
+          const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(4000)});
+          if (!r.ok) continue;
+          const data = await r.json();
+          const meta = data?.chart?.result?.[0]?.meta;
+          if (meta?.regularMarketPrice) {
+            results[key] = {
+              price: meta.regularMarketPrice,
+              prev:  meta.chartPreviousClose || meta.previousClose,
+              change: meta.regularMarketPrice - (meta.chartPreviousClose || meta.previousClose || meta.regularMarketPrice),
+              changePct: ((meta.regularMarketPrice - (meta.chartPreviousClose || meta.regularMarketPrice)) / (meta.chartPreviousClose || meta.regularMarketPrice) * 100),
+            };
+            return;
+          }
+        } catch(_) {}
+      }
+    } catch(_) {}
+  }));
+
+  // Interpret macro environment
+  const vix     = results.vix?.price;
+  const tnx     = results.tnx?.price;
+  const dxy     = results.dxy?.price;
+  const spy5d   = results.spy?.changePct;
+
+  let regime = 'neutral';
+  const signals = [];
+  if (vix) {
+    if (vix > 30)       { signals.push('VIX>' + vix.toFixed(1) + '-fear'); regime='risk-off'; }
+    else if (vix > 20)  { signals.push('VIX=' + vix.toFixed(1) + '-elevated'); }
+    else if (vix < 15)  { signals.push('VIX=' + vix.toFixed(1) + '-complacent'); }
+  }
+  if (tnx) {
+    if (tnx > 4.5)      { signals.push('TNX>' + tnx.toFixed(2) + '-high_yields'); regime='risk-off'; }
+    else if (tnx < 3.5) { signals.push('TNX=' + tnx.toFixed(2) + '-low_yields'); }
+  }
+  if (dxy) {
+    if (dxy > 106)      { signals.push('DXY=' + dxy.toFixed(1) + '-strong$'); }
+    else if (dxy < 100) { signals.push('DXY=' + dxy.toFixed(1) + '-weak$'); }
+  }
+
+  return {
+    vix, tnx, dxy, spy5d,
+    regime,
+    signals: signals.join(','),
+    summary: signals.length > 0 ? `Macro:${signals.join(',')}.Regime:${regime}.` : '',
+  };
+}
 
 // ── Short Interest & Institutional Data (FINRA/Yahoo) ────────
 async function fetchShortInterest(ticker) {
@@ -1434,12 +1529,13 @@ async function runAnalysis(sym) {
     const withTimeout = (promise, ms=6000) =>
       Promise.race([promise, new Promise(r => setTimeout(() => r(null), ms))]);
 
-    const [liveData, insiderData, trendsData, shortData, optionsData] = await Promise.all([
+    const [liveData, insiderData, trendsData, shortData, optionsData, macroData] = await Promise.all([
       withTimeout(fetchLivePrice(t),      6000),
       withTimeout(fetchInsiderTrading(t), 4000),
       withTimeout(fetchGoogleTrends(t),   4000),
       withTimeout(fetchShortInterest(t),  4000),
       withTimeout(fetchOptionsFlow(t),    4000),
+      withTimeout(fetchMacroData(),       5000),
     ]);
     // Steps 1+2 done after data fetch
     if(window._advanceStep) { window._advanceStep(); window._advanceStep(); }
@@ -1515,7 +1611,7 @@ async function runAnalysis(sym) {
       if (loading) loading.appendChild(warn);
     }
     if(window._advanceStep) window._advanceStep(); // Step: Running AI
-    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData), useWebSearch);
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData), useWebSearch);
     if(window._advanceStep) window._advanceStep(); // Step: Building report
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
@@ -1618,6 +1714,8 @@ async function runAnalysis(sym) {
     currentResult = parsed;
     clearInterval(iv);
     clearInterval(window._elapsedInterval);
+    window.currentTicker = t;
+    window.currentParsed = parsed;
     renderAnalysis(t, parsed);
     document.getElementById('liveLabel').textContent = 'LIVE';
   } catch (e) {
@@ -1671,12 +1769,17 @@ function renderAnalysis(ticker, d) {
   const srcs = d.sources_used || [];
   const tracked = watchlist.some(w => w.ticker === ticker);
 
-  const fgrid = [
+  const allForecastCells = [
     {key:'week',      label:'1 WEEK',   acc:'var(--green)'},
     {key:'month',     label:'1 MONTH',  acc:'var(--blue)'},
     {key:'half_year', label:'6 MONTHS', acc:'var(--yellow)'},
     {key:'year',      label:'1 YEAR',   acc:'var(--orange)'},
-  ].map(({key,label,acc}) => {
+  ];
+  const visibleForecasts = highConvictionMode
+    ? allForecastCells.filter(c => (fs[c.key]?.confidence || 0) >= 55)
+    : allForecastCells;
+  const hiddenCount = allForecastCells.length - visibleForecasts.length;
+  const fgrid = visibleForecasts.map(({key,label,acc}) => {
     const f = fs[key] || {}; const fc = sc2cls(f.signal||'NEUTRAL');
     return `<div class="fc-cell" style="--acc:${acc}">
       <div class="fc-tf">${label}</div>
@@ -1684,6 +1787,20 @@ function renderAnalysis(ticker, d) {
         ${f.direction==='UP'?'↑ UP':f.direction==='DOWN'?'↓ DOWN':f.direction||f.signal||'—'}
       </div>
       ${(f.range_low||f.range_high) ? `<div style="font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:2px;">${f.range_low||''} → ${f.range_high||''}</div>` : (f.range ? `<div style="font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:2px;">${f.range}</div>` : '')}
+      ${(f.prob_up!==undefined) ? `
+        <div style="margin-top:8px;padding:6px 8px;background:var(--s2);border-radius:6px;">
+          <div style="font-family:var(--mono);font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">Probability Distribution</div>
+          <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--b2);">
+            <div style="width:${f.prob_up}%;background:var(--green);" title="Up: ${f.prob_up}%"></div>
+            <div style="width:${f.prob_flat||0}%;background:var(--yellow);" title="Flat: ${f.prob_flat}%"></div>
+            <div style="width:${f.prob_down}%;background:var(--red);" title="Down: ${f.prob_down}%"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;margin-top:3px;">
+            <span style="color:var(--green);">↑ ${f.prob_up}%</span>
+            <span style="color:var(--yellow);">→ ${f.prob_flat||0}%</span>
+            <span style="color:var(--red);">↓ ${f.prob_down}%</span>
+          </div>
+        </div>` : ''}
       ${f.magnitude ? `<div style="display:inline-block;padding:2px 7px;border-radius:20px;font-family:var(--mono);font-size:9px;margin-top:3px;background:${f.magnitude==='STRONG'?'rgba(0,229,160,.12)':f.magnitude==='WEAK'?'rgba(255,68,102,.1)':'rgba(255,208,96,.1)'};color:${f.magnitude==='STRONG'?'var(--green)':f.magnitude==='WEAK'?'var(--red)':'var(--yellow)'};">${f.magnitude}</div>` : ''}
       <div class="fc-rng">${f.range||'—'}</div>
       <div class="cbar"><div class="cfill" style="width:${f.confidence||0}%"></div></div>
