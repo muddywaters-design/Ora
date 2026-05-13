@@ -272,6 +272,10 @@ body.light .live-label { color: var(--green); }
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;">
       🌐 ON
     </button>
+    <button onclick="showFinnhubSetup()" title="Configure Finnhub API for reliable prices"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;" id="finnhubBtn">
+      📈 <span id="finnhubLabel">PRICES</span>
+    </button>
     <button id="convictionBtn" onclick="toggleConviction()" title="High conviction mode — only shows trades >55% confidence"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:32px;padding:0 8px;border-radius:8px;cursor:pointer;font-size:10px;font-family:var(--mono);display:flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0;">
       🎯 ALL
@@ -848,6 +852,117 @@ ${research.slice(0, 1500)}
 
 
 
+// ── Finnhub API Integration ──────────────────────────────────
+let finnhubKey = localStorage.getItem('so_finnhub') || '';
+
+function showFinnhubSetup() {
+  const existing = document.getElementById('finnhubModal');
+  if (existing) { existing.remove(); return; }
+
+  const modal = document.createElement('div');
+  modal.id = 'finnhubModal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--b1);border-radius:14px;padding:20px;max-width:420px;width:100%;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--t1);">📈 Finnhub Price API</div>
+        <button onclick="document.getElementById('finnhubModal').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:18px;">✕</button>
+      </div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.6;margin-bottom:14px;">
+        Free fallback for live stock prices when Yahoo Finance proxies fail.
+        <ul style="padding-left:18px;margin:8px 0;">
+          <li>60 requests/minute free</li>
+          <li>Real-time US stock prices</li>
+          <li>No credit card required</li>
+        </ul>
+        <div style="margin-top:10px;">
+          1. Go to <a href="https://finnhub.io/register" target="_blank" style="color:var(--blue);">finnhub.io/register</a><br>
+          2. Sign up (free)<br>
+          3. Copy your API key from dashboard<br>
+          4. Paste it below
+        </div>
+      </div>
+      <label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Finnhub API Key</label>
+      <input type="password" id="finnhubKeyInput" value="${finnhubKey}" placeholder="d0xxxxxxxx..." style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:10px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;box-sizing:border-box;">
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button onclick="saveFinnhubKey()" style="flex:1;background:var(--green);color:var(--bg);border:none;padding:10px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">Save Key</button>
+        <button onclick="clearFinnhubKey()" style="background:transparent;border:1px solid var(--b2);color:var(--t3);padding:10px 14px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;">Clear</button>
+      </div>
+      <div id="finnhubStatus" style="margin-top:10px;font-size:10px;color:var(--t3);text-align:center;"></div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function saveFinnhubKey() {
+  const input = document.getElementById('finnhubKeyInput');
+  if (!input) return;
+  const key = input.value.trim();
+  if (!key) { document.getElementById('finnhubStatus').textContent = 'Please enter a key'; return; }
+  finnhubKey = key;
+  localStorage.setItem('so_finnhub', key);
+  updateFinnhubBadge();
+  document.getElementById('finnhubStatus').innerHTML = '<span style="color:var(--green);">✓ Saved!</span> Closing...';
+  setTimeout(() => document.getElementById('finnhubModal')?.remove(), 800);
+}
+
+function clearFinnhubKey() {
+  finnhubKey = '';
+  localStorage.removeItem('so_finnhub');
+  const input = document.getElementById('finnhubKeyInput');
+  if (input) input.value = '';
+  updateFinnhubBadge();
+  document.getElementById('finnhubStatus').innerHTML = '<span style="color:var(--yellow);">Key cleared</span>';
+}
+
+function updateFinnhubBadge() {
+  const label = document.getElementById('finnhubLabel');
+  const btn   = document.getElementById('finnhubBtn');
+  if (!label || !btn) return;
+  if (finnhubKey) {
+    label.textContent = 'ON';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'var(--green)';
+  } else {
+    label.textContent = 'OFF';
+    btn.style.color = 'var(--t3)';
+    btn.style.borderColor = 'var(--b2)';
+  }
+}
+setTimeout(updateFinnhubBadge, 100);
+
+async function fetchFinnhubPrice(ticker) {
+  if (!finnhubKey) return null;
+  try {
+    // /quote endpoint — direct, no CORS proxy needed
+    const url = `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${finnhubKey}`;
+    const r = await fetch(url, {signal: AbortSignal.timeout(5000)});
+    if (!r.ok) return null;
+    const data = await r.json();
+    // Finnhub returns: c=current, d=change, dp=changePct, h=high, l=low, o=open, pc=prevClose
+    if (!data?.c || data.c === 0) return null;
+
+    return {
+      price:      data.c.toFixed(2),
+      change:     (data.d || 0).toFixed(2),
+      changePct:  (data.dp || 0).toFixed(2),
+      prevClose:  data.pc ? data.pc.toFixed(2) : null,
+      high52:     '—',
+      low52:      '—',
+      marketCap:  '—',
+      volume:     '—',
+      currency:   'USD',
+      rsi:        '—', macd: '—', macdSignal: '—',
+      bb_upper:   '—', bb_lower: '—', bb_mid: '—',
+      putCallRatio: '—',
+      _closes:    [],
+      source:     'Finnhub (live)',
+    };
+  } catch(e) {
+    console.warn('Finnhub failed:', e.message);
+    return null;
+  }
+}
+
 // ── Macro Data (VIX, Treasury yields, DXY) ────────────────────
 async function fetchMacroData() {
   const symbols = {
@@ -1372,6 +1487,13 @@ async function fetchInsiderTrading(ticker) {
       } catch(_) { continue; }
     }
   } catch(e) { console.warn('EDGAR failed:', e.message); }
+  // Finnhub fallback if Yahoo failed
+  if (finnhubKey) {
+    try {
+      const finnhubData = await fetchFinnhubPrice(ticker);
+      if (finnhubData) return finnhubData;
+    } catch(_) {}
+  }
   return null;
 }
 
