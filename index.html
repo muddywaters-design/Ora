@@ -3353,14 +3353,33 @@ async function addPosition() {
   const btn = document.querySelector('#addPositionForm button');
   if (btn) { btn.textContent = '⏳ Fetching price…'; btn.disabled = true; }
 
-  // Get current price + exchange rate
-  const [live, rate] = await Promise.all([
-    fetchLivePrice(ticker),
-    fetchExchangeRate('USD', currency), // rate = currency per 1 USD (e.g. 3.7 ILS/USD)
-  ]);
+  // Get current price + exchange rate — try 3 times
+  let live = null, rate = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    [live, rate] = await Promise.all([
+      fetchLivePrice(ticker),
+      fetchExchangeRate('USD', currency),
+    ]);
+    if (live?.price) break;
+    if (btn) btn.textContent = `Retrying... (${attempt+2}/3)`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
 
-  const entryPrice = live ? parseFloat(live.price) : 0;
-  if (!entryPrice) { alert('Could not fetch live price. Try again.'); if (btn) { btn.textContent = '✓ Add to Portfolio'; btn.disabled = false; } return; }
+  let entryPrice = live ? parseFloat(live.price) : 0;
+  if (!entryPrice) {
+    // Allow manual price entry as fallback
+    const manualPrice = prompt('Live price unavailable for ' + ticker + '.\n\nEnter the current price manually (in USD):');
+    if (!manualPrice) {
+      if (btn) { btn.textContent = '✓ Add to Portfolio'; btn.disabled = false; }
+      return;
+    }
+    entryPrice = parseFloat(manualPrice);
+    if (!entryPrice || entryPrice <= 0) {
+      alert('Invalid price entered.');
+      if (btn) { btn.textContent = '✓ Add to Portfolio'; btn.disabled = false; }
+      return;
+    }
+  }
 
   // Convert to USD: investedUSD = investedCurrency / rate
   let investedUSD;
