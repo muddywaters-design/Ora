@@ -3554,21 +3554,47 @@ async function refreshPortfolio() {
   const btn = document.getElementById('refreshPortfolioBtn');
   if (btn) { btn.textContent = '⏳ Updating…'; btn.disabled = true; }
 
-  // Fetch all portfolio prices in parallel
+  // Clear price cache to force fresh fetches
+  if (typeof priceCache !== 'undefined') {
+    portfolio.positions.forEach(p => { delete priceCache[p.ticker?.toUpperCase()]; });
+  }
+
+  let success = 0, failed = 0;
   await Promise.allSettled(
     portfolio.positions.map(pos =>
       fetchLivePrice(pos.ticker).then(live => {
         if (live?.price) {
           pos.currentPrice  = parseFloat(live.price);
-          pos.prevClose     = live.prevClose ? parseFloat(live.prevClose) : null;
+          if (live.prevClose) pos.prevClose = parseFloat(live.prevClose);
           pos.lastUpdated   = new Date().toISOString();
+          success++;
+        } else {
+          failed++;
         }
-      }).catch(() => {})
+      }).catch(() => { failed++; })
     )
   );
+
   savePortfolio();
   renderPortfolio();
-  if (btn) { btn.textContent = '↻ Refresh Prices'; btn.disabled = false; }
+
+  if (btn) {
+    if (failed === 0) {
+      btn.textContent = '✓ Updated ' + success + '/' + portfolio.positions.length;
+      btn.style.color = 'var(--green)';
+      btn.style.borderColor = 'var(--green)';
+    } else {
+      btn.textContent = '⚠ ' + success + '/' + portfolio.positions.length + ' updated';
+      btn.style.color = 'var(--yellow)';
+      btn.style.borderColor = 'var(--yellow)';
+    }
+    setTimeout(() => {
+      btn.textContent = '↻ Refresh Prices';
+      btn.style.color = 'var(--t2)';
+      btn.style.borderColor = 'var(--b2)';
+      btn.disabled = false;
+    }, 2500);
+  }
 }
 
 function removePosition(id) {
