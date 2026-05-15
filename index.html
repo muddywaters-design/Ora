@@ -371,7 +371,7 @@ body.light .live-label { color: var(--green); }
       <!-- Header -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
         <div>
-          <h2 style="font-family:var(--mono);font-size:14px;font-weight:700;letter-spacing:.05em;">💼 Virtual Portfolio</h2>
+          <h2 style="font-family:var(--mono);font-size:14px;font-weight:700;letter-spacing:.05em;">💼 <span id="portfolioTitle">Virtual Portfolio</span></h2>
           <div style="font-size:11px;color:var(--t3);margin-top:3px;">Track your virtual investments and model forecast accuracy</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -387,6 +387,9 @@ body.light .live-label { color: var(--green); }
           </button>
         </div>
       </div>
+
+      <!-- Portfolio selector tabs -->
+      <div id="portfolioTabs" style="display:flex;gap:6px;overflow-x:auto;padding:4px 0 12px;-webkit-overflow-scrolling:touch;"></div>
 
       <!-- Summary cards -->
       <div id="portfolioSummary"></div>
@@ -3216,24 +3219,98 @@ function getCalibrationFactor(timeframe) {
   return accuracy < 0.5 ? 0.85 : accuracy > 0.7 ? 1.1 : 1.0;
 }
 
-let portfolio = (() => {
-  try {
-    const raw = localStorage.getItem('so_portfolio');
-    if (!raw) return {"budget":10000,"positions":[]};
-    const parsed = JSON.parse(raw);
-    // Deduplicate without saving immediately
-    if (parsed.positions) {
-      parsed.positions = parsed.positions.filter((p,i,arr) => arr.findIndex(x=>x.id===p.id)===i);
-    }
-    return parsed;
-  } catch(e) {
-    console.warn('Portfolio parse error:', e);
-    return {"budget":10000,"positions":[]};
+// ── Multi-Portfolio System ────────────────────────────────────
+(function migratePortfolios() {
+  if (localStorage.getItem('so_portfolios')) return;
+  const oldData = localStorage.getItem('so_portfolio');
+  let pfs;
+  if (oldData) {
+    try {
+      const old = JSON.parse(oldData);
+      pfs = [{ id: 'pf_' + Date.now(), name: 'Main Portfolio', budget: old.budget || 10000, positions: old.positions || [], createdAt: new Date().toISOString() }];
+    } catch(_) { pfs = [{ id: 'pf_' + Date.now(), name: 'Main Portfolio', budget: 10000, positions: [], createdAt: new Date().toISOString() }]; }
+  } else {
+    pfs = [{ id: 'pf_' + Date.now(), name: 'Main Portfolio', budget: 10000, positions: [], createdAt: new Date().toISOString() }];
   }
+  localStorage.setItem('so_portfolios', JSON.stringify(pfs));
+  localStorage.setItem('so_active_portfolio', pfs[0].id);
 })();
 
+let portfolios = (() => {
+  try { return JSON.parse(localStorage.getItem('so_portfolios')) || []; } catch(_) { return []; }
+})();
+let activePortfolioId = localStorage.getItem('so_active_portfolio') || portfolios[0]?.id;
+
+function getActivePortfolio() {
+  return portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
+}
+
+function switchPortfolio(id) {
+  activePortfolioId = id;
+  localStorage.setItem('so_active_portfolio', id);
+  renderPortfolio();
+}
+
+function createPortfolio() {
+  const name = prompt('Portfolio name:', 'Portfolio ' + (portfolios.length + 1));
+  if (!name?.trim()) return;
+  const newPf = { id: 'pf_' + Date.now(), name: name.trim(), budget: 10000, positions: [], createdAt: new Date().toISOString() };
+  portfolios.push(newPf);
+  activePortfolioId = newPf.id;
+  saveAllPortfolios();
+  localStorage.setItem('so_active_portfolio', newPf.id);
+  renderPortfolio();
+}
+
+function deletePortfolio(id) {
+  if (portfolios.length <= 1) { alert('Cannot delete the last portfolio. Create another first.'); return; }
+  const pf = portfolios.find(p => p.id === id);
+  if (!pf) return;
+  const count = pf.positions?.length || 0;
+  if (!confirm('Delete "' + pf.name + '"?' + (count ? ' Will remove ' + count + ' position(s).' : ''))) return;
+  portfolios = portfolios.filter(p => p.id !== id);
+  if (activePortfolioId === id) {
+    activePortfolioId = portfolios[0].id;
+    localStorage.setItem('so_active_portfolio', activePortfolioId);
+  }
+  saveAllPortfolios();
+  renderPortfolio();
+}
+
+function renamePortfolio(id) {
+  const pf = portfolios.find(p => p.id === id);
+  if (!pf) return;
+  const newName = prompt('Rename portfolio:', pf.name);
+  if (!newName?.trim()) return;
+  pf.name = newName.trim();
+  saveAllPortfolios();
+  renderPortfolio();
+}
+
+function saveAllPortfolios() {
+  localStorage.setItem('so_portfolios', JSON.stringify(portfolios));
+}
+
+// Proxy: 'portfolio' refers to active portfolio
+let portfolio = new Proxy({}, {
+  get(_, prop) {
+    const a = getActivePortfolio();
+    if (!a) return prop === 'positions' ? [] : undefined;
+    return a[prop];
+  },
+  set(_, prop, value) {
+    const a = getActivePortfolio();
+    if (a) a[prop] = value;
+    return true;
+  }
+});
+
 function savePortfolio() {
-  localStorage.setItem('so_portfolio', JSON.stringify(portfolio));
+  // Save all portfolios (not just active)
+  saveAllPortfolios();
+  // Keep backward compat
+  const active = getActivePortfolio();
+  if (active) localStorage.setItem('so_portfolio', JSON.stringify(active));
 }
 
 // Data recovery: call recoverData() in browser console if data appears missing
@@ -3603,7 +3680,36 @@ function removePosition(id) {
   renderPortfolio();
 }
 
+function renderPortfolioTabs() {
+  const container = document.getElementById('portfolioTabs');
+  if (!container) return;
+  if (portfolios.length === 0) { container.innerHTML = ''; return; }
+
+  const tabs = portfolios.map(function(p) {
+    const isActive = p.id === activePortfolioId;
+    const positionCount = p.positions?.length || 0;
+    return '<div style="display:flex;align-items:center;background:' + (isActive ? 'var(--blue)' : 'var(--s2)') + ';border:1px solid ' + (isActive ? 'var(--blue)' : 'var(--b1)') + ';border-radius:8px;padding:0 2px 0 10px;flex-shrink:0;">' +
+      '<button onclick="switchPortfolio(\'' + p.id + '\')" style="background:none;border:none;color:' + (isActive ? 'var(--bg)' : 'var(--t1)') + ';font-family:var(--mono);font-size:11px;font-weight:' + (isActive ? '700' : '500') + ';padding:8px 6px 8px 0;cursor:pointer;">' +
+        p.name + ' <span style="opacity:.6;font-size:9px;">(' + positionCount + ')</span>' +
+      '</button>' +
+      (isActive ? '<button onclick="renamePortfolio(\'' + p.id + '\')" title="Rename" style="background:none;border:none;color:var(--bg);opacity:.6;cursor:pointer;padding:6px 4px;font-size:11px;">✏️</button>' : '') +
+      (isActive && portfolios.length > 1 ? '<button onclick="deletePortfolio(\'' + p.id + '\')" title="Delete" style="background:none;border:none;color:var(--bg);opacity:.6;cursor:pointer;padding:6px 6px 6px 4px;font-size:11px;">🗑️</button>' : '') +
+    '</div>';
+  }).join('');
+
+  container.innerHTML = tabs +
+    '<button onclick="createPortfolio()" style="background:transparent;border:1px dashed var(--b2);color:var(--t3);padding:8px 12px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;flex-shrink:0;">+ New Portfolio</button>';
+
+  // Update title
+  const activeName = getActivePortfolio()?.name;
+  const titleEl = document.getElementById('portfolioTitle');
+  if (titleEl && activeName) titleEl.textContent = activeName;
+}
+
 function renderPortfolio() {
+  // Render portfolio tabs first
+  renderPortfolioTabs();
+
   const summary = document.getElementById('portfolioSummary');
   const holdings = document.getElementById('portfolioHoldings');
   if (!summary || !holdings) return;
