@@ -2063,6 +2063,116 @@ function renderAnalysis(ticker, d) {
       <div class="cb"><div class="sg-grid">${sgrid}</div></div>
     </div>
 
+    ${(()=>{
+      // Interest Signals — real data on market attention/interest
+      const rows = [];
+      
+      // 1. Volume vs Average (REAL — from Yahoo)
+      if (d.live_volume_signal && d.live_volume_signal !== '—') {
+        const ratio = parseFloat(d.live_volume_ratio) || 1;
+        const isHot = ratio >= 1.5;
+        const color = ratio >= 2 ? 'var(--red)' : ratio >= 1.5 ? 'var(--yellow)' : ratio >= 0.8 ? 'var(--t1)' : 'var(--t3)';
+        const bar = Math.min(100, ratio * 33);
+        rows.push({
+          label: 'Trading Volume',
+          value: d.live_volume_signal,
+          detail: d.live_volume_ratio + 'x average',
+          color, bar,
+          note: isHot ? '🔥 Unusual activity' : 'Normal range',
+        });
+      }
+      
+      // 2. Google Trends estimate (ESTIMATE — from Claude)
+      if (d.live_trends_signal && d.live_trends_signal !== '—') {
+        const tc = (d.live_trends_change||'').toLowerCase();
+        const color = tc.includes('surg')||tc.includes('spike')||tc.includes('rising') ? 'var(--green)' : tc.includes('declin')||tc.includes('fall') ? 'var(--red)' : 'var(--t1)';
+        rows.push({
+          label: 'Search Interest',
+          value: d.live_trends_signal,
+          detail: d.live_trends_change || d.live_trends_current || '',
+          color, bar: 60,
+          note: '~ AI estimate',
+        });
+      }
+      
+      // 3. Short Interest (REAL — from short data)
+      if (d.live_short_pct && d.live_short_pct !== '—') {
+        const sp = parseFloat(d.live_short_pct) || 0;
+        const color = sp >= 20 ? 'var(--red)' : sp >= 10 ? 'var(--yellow)' : 'var(--t1)';
+        rows.push({
+          label: 'Short Interest',
+          value: d.live_short_pct + '% of float',
+          detail: d.live_squeeze ? 'Squeeze score: ' + d.live_squeeze : '',
+          color, bar: Math.min(100, sp * 3),
+          note: sp >= 20 ? '⚡ High squeeze potential' : sp >= 10 ? 'Elevated' : 'Low',
+        });
+      }
+      
+      // 4. Options Flow (REAL — from options data)
+      if (d.live_options_flow && d.live_options_flow !== '—') {
+        const flow = (d.live_options_flow||'').toLowerCase();
+        const color = flow.includes('bull') ? 'var(--green)' : flow.includes('bear') ? 'var(--red)' : 'var(--t1)';
+        rows.push({
+          label: 'Options Flow',
+          value: d.live_options_flow,
+          detail: d.live_options_pc ? 'P/C ratio: ' + d.live_options_pc : '',
+          color, bar: 55,
+          note: d.live_unusual && d.live_unusual !== '—' ? '👀 ' + d.live_unusual : '',
+        });
+      }
+      
+      // 5. Institutional Activity (REAL — from short data)
+      if (d.live_inst_pct && d.live_inst_pct !== '—') {
+        const ip = parseFloat(d.live_inst_pct) || 0;
+        rows.push({
+          label: 'Institutional Hold',
+          value: d.live_inst_pct + '%',
+          detail: d.live_inst_trend && d.live_inst_trend !== '—' ? d.live_inst_trend : '',
+          color: 'var(--t1)', bar: Math.min(100, ip),
+          note: ip >= 70 ? 'Heavily institutional' : ip >= 40 ? 'Moderate' : 'Retail-driven',
+        });
+      }
+      
+      // 6. Insider Activity (REAL — from SEC)
+      if (d.live_insider_signal && d.live_insider_signal !== '—') {
+        const sig = (d.live_insider_signal||'').toLowerCase();
+        const color = sig.includes('buy') ? 'var(--green)' : sig.includes('sell') ? 'var(--red)' : 'var(--t1)';
+        rows.push({
+          label: 'Insider Activity',
+          value: d.live_insider_signal,
+          detail: (d.live_insider_buys||0) + ' buys / ' + (d.live_insider_sells||0) + ' sells',
+          color, bar: 50,
+          note: 'Last 90 days (SEC)',
+        });
+      }
+      
+      if (rows.length === 0) return '';
+      
+      const rowsHTML = rows.map(r => 
+        '<div style="padding:12px 0;border-bottom:1px solid var(--b1);">' +
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">' +
+            '<span style="font-size:12px;color:var(--t2);font-family:var(--mono);">' + r.label + '</span>' +
+            '<span style="font-size:13px;font-weight:700;color:' + r.color + ';font-family:var(--mono);">' + r.value + '</span>' +
+          '</div>' +
+          '<div style="height:5px;background:var(--b2);border-radius:3px;overflow:hidden;margin-bottom:5px;">' +
+            '<div style="height:100%;width:' + r.bar + '%;background:' + r.color + ';border-radius:3px;transition:width .5s;"></div>' +
+          '</div>' +
+          '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3);">' +
+            '<span>' + (r.detail||'') + '</span>' +
+            '<span>' + (r.note||'') + '</span>' +
+          '</div>' +
+        '</div>'
+      ).join('');
+      
+      return '<div class="card">' +
+        '<div class="ch">📊 Interest & Attention Signals</div>' +
+        '<div class="cb">' +
+          '<div style="font-size:10px;color:var(--t3);margin-bottom:8px;line-height:1.5;">Real market data showing where attention is flowing. Volume, short interest, options &amp; insider data are live; search interest is an AI estimate.</div>' +
+          rowsHTML +
+        '</div>' +
+      '</div>';
+    })()}
+
     ${txtCard('Key Catalysts', d.key_catalysts, 'var(--green)')}
     ${txtCard('Key Risks', d.key_risks, 'var(--red)')}
     ${txtCard('Full Analysis', d.full_analysis, 'var(--blue)')}
