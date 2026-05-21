@@ -622,7 +622,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
-    system: 'You are StockOracle, an elite quant analyst. Output valid JSON only. METHODOLOGY: (1) Search latest news. (2) Analyze technicals+fundamentals+microstructure+macro. (3) DEVIL\'S ADVOCATE: argue why forecast could be WRONG. (4) Provide PROBABILITY DISTRIBUTION for each timeframe: prob_up%, prob_flat%, prob_down% (must sum to 100). (5) Direction = highest probability. CALIBRATION: Confidence >70% only when 4+ signals agree AND devil\'s advocate fails. NO_TRADE if best probability <50%. FEW-SHOT: Stocks near 52W high with high RSI often pull back 10-20%. Volume spikes 3x+ often = 15-30% move in spike direction within 2 weeks. Earnings beats with rising guidance = bullish 1-3 months. High VIX/yields = penalty on bullish. Strong sector + strong RS = boost confidence. Always include bull/bear scenarios with specific price triggers.',
+    system: 'You are StockOracle, a quant analyst. JSON only. Steps: (1)Search news. (2)Analyze technicals+macro. (3)Counter-argue why wrong. (4)For each timeframe give prob_up+prob_flat+prob_down=100. Direction=highest prob. Confidence>70% only if 4+ signals agree. Wide ranges. Include bull/bear cases.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -848,7 +848,7 @@ function mkJSONPrompt(ticker, research) {
 
 ${research.slice(0, 1500)}
 
-{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"UP","magnitude":"MODERATE","range_low":"+2%","range_high":"+12%","prob_up":60,"prob_flat":25,"prob_down":15,"confidence":68,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"month":{"direction":"UP","magnitude":"STRONG","range_low":"+5%","range_high":"+25%","prob_up":55,"prob_flat":25,"prob_down":20,"confidence":62,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"half_year":{"direction":"UP","magnitude":"MODERATE","range_low":"+8%","range_high":"+40%","prob_up":50,"prob_flat":25,"prob_down":25,"confidence":52,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"},"year":{"direction":"UP","magnitude":"STRONG","range_low":"+15%","range_high":"+60%","prob_up":45,"prob_flat":30,"prob_down":25,"confidence":44,"signal":"BULLISH","reasoning":"Reason.","bull_case":"Bull.","bear_case":"Bear.","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
+{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"UP","magnitude":"MODERATE","range_low":"+2%","range_high":"+12%","prob_up":60,"prob_flat":25,"prob_down":15,"confidence":68,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"month":{"direction":"UP","magnitude":"STRONG","range_low":"+5%","range_high":"+25%","prob_up":55,"prob_flat":25,"prob_down":20,"confidence":62,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"half_year":{"direction":"UP","magnitude":"MODERATE","range_low":"+8%","range_high":"+40%","prob_up":50,"prob_flat":25,"prob_down":25,"confidence":52,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"year":{"direction":"UP","magnitude":"STRONG","range_low":"+15%","range_high":"+60%","prob_up":45,"prob_flat":30,"prob_down":25,"confidence":44,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
 }
 
 
@@ -1615,6 +1615,11 @@ async function fetchFundamentals() { return {}; }
 
 // ── Fear & Greed Index ────────────────────────────────────────
 // ── Run Analysis ───────────────────────────────────────────────
+function goAnalyze(ticker) { 
+  const input = document.getElementById('tickerInput');
+  if (input) input.value = ticker;
+  return runAnalysis(ticker); 
+}
 async function runAnalysis(sym) {
   const t = (sym || document.getElementById('tickerInput').value).trim().toUpperCase();
   if (!t) return;
@@ -1848,9 +1853,9 @@ async function runAnalysis(sym) {
     clearInterval(iv);
     clearInterval(window._elapsedInterval);
     const errMsg = e.message || 'Unknown error';
-    const isRate  = errMsg.includes('rate limit') || errMsg.includes('529') || errMsg.includes('overloaded') || errMsg.includes('30,000');
+    const isRate  = errMsg.includes('rate limit') || errMsg.includes('529') || errMsg.includes('overloaded') || errMsg.includes('30,000') || errMsg.includes('input tokens per minute');
     const isAuth  = errMsg.includes('401') || errMsg.includes('api key') || errMsg.includes('authentication');
-    const hint = isRate  ? '<br><span style="font-size:11px;color:var(--yellow);">⏱ Rate limit hit — wait 30 seconds and try again, or check billing at console.anthropic.com</span>' :
+    const hint = isRate  ? '<br><span style="font-size:11px;color:var(--yellow);">⏱ Rate limit hit. Try: (1) Turn off 🌐 web search to use less tokens. (2) Wait 60 seconds. (3) Check billing at console.anthropic.com</span>' :
                  isAuth  ? '<br><span style="font-size:11px;color:var(--yellow);">🔑 API key issue — check your key has credits</span>' : '';
     document.getElementById('analyzeContent').innerHTML = `<div class="err-box">⚠️ ${errMsg}${hint}<br><button onclick="runAnalysis(document.getElementById('tickerInput').value)" style="margin-top:8px;background:var(--blue);color:var(--bg);border:none;padding:6px 14px;border-radius:6px;font-family:var(--mono);font-size:10px;cursor:pointer;">↺ Retry</button></div>`;
     document.getElementById('liveLabel').textContent = 'ERROR';
@@ -2622,7 +2627,7 @@ async function checkAccuracy(ticker) {
     const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 
     // Step 2: Calculate actual change if we have both prices
-    let actualChangePct = null;
+    actualChangePct = null;
     if (currentPrice && forecastPrice) {
       actualChangePct = ((currentPrice - forecastPrice) / forecastPrice * 100);
     }
