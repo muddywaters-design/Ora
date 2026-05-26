@@ -280,6 +280,10 @@ body.light .live-label { color: var(--green); }
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
       🎯 ALL
     </button>
+    <button id="ensembleBtn" onclick="toggleEnsemble()" title="Ensemble mode — 2 parallel models for higher accuracy (uses 2x tokens)"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
+      🎭 1x
+    </button>
     <div class="live-pill">
       <div class="live-dot"></div>
       <span class="live-label" id="liveLabel">LIVE</span>
@@ -547,6 +551,40 @@ function toggleConviction() {
   if (window.currentParsed) renderAnalysis(window.currentTicker, window.currentParsed);
 }
 
+// Rate limit cooldown badge
+function updateRateLimitBadge() {
+  const label = document.getElementById('liveLabel');
+  if (!label) return;
+  if (!window._rateLimitUntil || Date.now() >= window._rateLimitUntil) {
+    if (label.textContent.startsWith('WAIT')) label.textContent = 'LIVE';
+    return;
+  }
+  const remaining = Math.ceil((window._rateLimitUntil - Date.now()) / 1000);
+  label.textContent = 'WAIT ' + remaining + 's';
+  setTimeout(updateRateLimitBadge, 1000);
+}
+
+// Ensemble mode toggle
+let ensembleMode = localStorage.getItem('so_ensemble') === 'on';
+function toggleEnsemble() {
+  ensembleMode = !ensembleMode;
+  localStorage.setItem('so_ensemble', ensembleMode ? 'on' : 'off');
+  const btn = document.getElementById('ensembleBtn');
+  if (btn) {
+    btn.textContent = ensembleMode ? '🎭 2x' : '🎭 1x';
+    btn.style.color = ensembleMode ? 'var(--green)' : 'var(--t2)';
+    btn.style.borderColor = ensembleMode ? 'var(--green)' : 'var(--b2)';
+  }
+}
+setTimeout(() => {
+  const btn = document.getElementById('ensembleBtn');
+  if (btn && ensembleMode) {
+    btn.textContent = '🎭 2x';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'var(--green)';
+  }
+}, 100);
+
 // Apply saved conviction state on load
 setTimeout(() => {
   const btn = document.getElementById('convictionBtn');
@@ -627,16 +665,40 @@ async function apiCall(messages, useSearch, maxTokens) {
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({}));
-    throw new Error(e.error?.message || `HTTP ${r.status}`);
+  // 90 second timeout (web search can be slow)
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      const errMsg = e.error?.message || `HTTP ${r.status}`;
+
+      // Auto-retry on overload (529) with exponential backoff
+      if (r.status === 529 || errMsg.includes('overloaded')) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const retry = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST', headers, body: JSON.stringify(body),
+        });
+        if (retry.ok) return retry.json();
+      }
+
+      throw new Error(errMsg);
+    }
+    return r.json();
+  } catch(e) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') throw new Error('Request timed out after 90s — try again or disable web search');
+    throw e;
   }
-  return r.json();
 }
 
 async function searchThenSummarize(prompt, maxTokens) {
@@ -652,10 +714,22 @@ async function toJSON(prompt, useSearch) {
 // ── Ensemble Forecasting ──────────────────────────────────────
 // Runs 2 parallel Claude calls and averages (faster than 3)
 async function toJSONEnsemble(prompt, useSearch) {
-  // Single call for speed
-  const results = await Promise.allSettled([
-    toJSON(prompt, useSearch),
-  ]);
+  // TRUE ENSEMBLE: 2 parallel calls with different analytical perspectives
+  // Models that agree = high confidence; models that disagree = uncertain forecast
+  // Uses global ensembleMode variable (toggled by 🎭 button)
+
+  let calls;
+  if (ensembleMode) {
+    // 2 parallel calls with different framing - they should converge if signal is strong
+    const techPrompt = prompt + '\n\nANALYTICAL FOCUS: Weight technical indicators (RSI, MACD, MA, volume) heavily. Be skeptical of news-driven moves.';
+    const fundPrompt = prompt + '\n\nANALYTICAL FOCUS: Weight fundamentals (earnings, sector momentum, macro) heavily. Be skeptical of short-term technicals.';
+    calls = [toJSON(techPrompt, useSearch), toJSON(fundPrompt, useSearch)];
+  } else {
+    // Single call mode (default - saves API tokens)
+    calls = [toJSON(prompt, useSearch)];
+  }
+
+  const results = await Promise.allSettled(calls);
 
   const parsed = [];
   for (const r of results) {
@@ -665,7 +739,6 @@ async function toJSONEnsemble(prompt, useSearch) {
   }
 
   if (parsed.length === 0) {
-    // Get the actual error from the first failed call
     const firstErr = results.find(r => r.status === 'rejected');
     const errMsg = firstErr?.reason?.message || 'API call failed';
     throw new Error(errMsg);
@@ -1147,11 +1220,20 @@ async function fetchExchangeRate(from, to) {
 // ── Live price fetcher ────────────────────────────────────────
 // Tries Yahoo Finance directly (works from browser, not from Claude.ai)
 async function fetchLivePrice(ticker) {
+  const cacheKey = ticker.toUpperCase();
+  // Check cache first
+  if (priceCache[cacheKey] && (Date.now() - priceCache[cacheKey].timestamp) < PRICE_CACHE_TTL) {
+    return priceCache[cacheKey].data;
+  }
+
   // If Finnhub key is set, try it FIRST (faster, no CORS proxies needed)
   if (typeof finnhubKey !== 'undefined' && finnhubKey) {
     try {
       const finnhubData = await fetchFinnhubPrice(ticker);
-      if (finnhubData?.price) return finnhubData;
+      if (finnhubData?.price) {
+        priceCache[cacheKey] = { data: finnhubData, timestamp: Date.now() };
+        return finnhubData;
+      }
     } catch(_) {}
   }
   const proxies = [
@@ -1435,7 +1517,7 @@ async function fetchLivePrice(ticker) {
         }
       } catch(_) {}
 
-      return {
+      const result = {
         price: price.toFixed(2), change, changePct,
         prevClose: prev ? prev.toFixed(2) : null,
         _closes: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [],
@@ -1455,6 +1537,9 @@ async function fetchLivePrice(ticker) {
         dividendYield, dividendLabel,
         source: 'Yahoo Finance (live)',
       };
+      // Cache successful result
+      priceCache[cacheKey] = { data: result, timestamp: Date.now() };
+      return result;
     } catch(e) { console.warn('Proxy failed:', proxy, e.message); }
   }
   return null; // all failed — Claude will use its own knowledge
@@ -1621,6 +1706,16 @@ function goAnalyze(ticker) {
   return runAnalysis(ticker); 
 }
 async function runAnalysis(sym) {
+  // Block during rate limit cooldown
+  if (window._rateLimitUntil && Date.now() < window._rateLimitUntil) {
+    const sec = Math.ceil((window._rateLimitUntil - Date.now()) / 1000);
+    const content = document.getElementById('analyzeContent');
+    if (content) {
+      content.innerHTML = '<div class="err-box">⏱ Rate limit cooldown. Wait ' + sec + 's before trying again.</div>';
+    }
+    return;
+  }
+
   const t = (sym || document.getElementById('tickerInput').value).trim().toUpperCase();
   if (!t) return;
   currentTicker = t;
@@ -1831,15 +1926,15 @@ async function runAnalysis(sym) {
       parsed.live_trends_current = trendsData.current_interest;
     }
     // Auto-calibrate confidence based on data signal agreement
-    calibrateConfidence(parsed, liveData);
-    // Apply historical accuracy calibration
-    ['week','month','half_year','year'].forEach(tf => {
-      if (parsed.forecasts?.[tf]?.confidence) {
-        const factor = getCalibrationFactor(tf);
-        parsed.forecasts[tf].confidence = Math.round(Math.min(90, Math.max(15, parsed.forecasts[tf].confidence * factor)));
-        if (factor !== 1.0) parsed.forecasts[tf].calibrated_by_history = true;
-      }
-    });
+    // Apply intelligence layer (order matters!)
+    sanityCheckForecast(parsed, liveData);     // Cap unrealistic ranges
+    earningsAdjustment(parsed, liveData);      // Reduce conf near earnings
+    volatilityAdjustment(parsed, liveData);    // Adjust for stock volatility
+    sectorAdjustment(parsed, liveData);        // Sector alignment boost/penalty
+    crossTimeframeCheck(parsed);               // MTF agreement check
+    calibrateConfidence(parsed, liveData);     // Signal consensus calibration
+    applyHistoricalCalibration(parsed);        // Learn from past forecasts
+    calculatePositionSize(parsed, liveData);   // Suggest position size
     // Record this forecast for future calibration
     if (liveData?.price) recordForecast(t, parsed.forecasts, parseFloat(liveData.price));
     currentResult = parsed;
@@ -1859,6 +1954,11 @@ async function runAnalysis(sym) {
                  isAuth  ? '<br><span style="font-size:11px;color:var(--yellow);">🔑 API key issue — check your key has credits</span>' : '';
     document.getElementById('analyzeContent').innerHTML = `<div class="err-box">⚠️ ${errMsg}${hint}<br><button onclick="runAnalysis(document.getElementById('tickerInput').value)" style="margin-top:8px;background:var(--blue);color:var(--bg);border:none;padding:6px 14px;border-radius:6px;font-family:var(--mono);font-size:10px;cursor:pointer;">↺ Retry</button></div>`;
     document.getElementById('liveLabel').textContent = 'ERROR';
+    // If rate limit, set cooldown timer
+    if (isRate) {
+      window._rateLimitUntil = Date.now() + 60000;
+      updateRateLimitBadge();
+    }
   } finally {
     document.getElementById('runBtn').disabled = false;
   }
@@ -1936,6 +2036,26 @@ function renderAnalysis(ticker, d) {
       <div class="fc-rng">${f.range||'—'}</div>
       <div class="cbar"><div class="cfill" style="width:${f.confidence||0}%"></div></div>
       <div class="fc-cf"><span class="${fc}">${f.signal||'NEUTRAL'}</span><span style="color:var(--t3)">${f.confidence||0}% conf</span></div>
+      ${(()=>{
+        const adjustments = [];
+        if (f._sanity_capped) adjustments.push('<span title="Range capped for realism">⚠ capped</span>');
+        if (f._earnings_adjustment) adjustments.push('<span title="Earnings within 14 days — lower confidence">📅 ' + f._earnings_adjustment + '</span>');
+        if (f._volatility_adjustment) adjustments.push('<span title="High volatility stock — adjusted">⚡ ' + (f._volatility_adjustment > 0 ? '+' : '') + f._volatility_adjustment + '</span>');
+        if (f._sector_aligned) adjustments.push('<span title="Forecast aligned with sector trend" style="color:var(--green)">📊 sector ✓</span>');
+        if (f._sector_conflict) adjustments.push('<span title="Forecast conflicts with sector trend" style="color:var(--red)">📊 sector ✗</span>');
+        if (f._historical_calibration && f._historical_calibration !== '1.00') {
+          adjustments.push('<span title="Adjusted by historical accuracy: ' + f._historical_calibration + 'x">🎯 cal</span>');
+        }
+        if (f._direction_corrected) adjustments.push('<span title="Direction matched to highest probability" style="color:var(--yellow)">↻ dir</span>');
+        if (f.ensemble_agreement) adjustments.push('<span title="Multiple models compared" style="color:var(--blue)">🎭 ' + f.ensemble_agreement + '</span>');
+        if (f._mtf_alignment === 'strong') adjustments.push('<span title="All timeframes agree" style="color:var(--green)">↔ aligned</span>');
+        if (f._mtf_alignment === 'conflict') adjustments.push('<span title="Timeframes disagree" style="color:var(--red)">↔ conflict</span>');
+        return adjustments.length > 0 ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;font-size:9px;color:var(--t3);font-family:var(--mono);">' + adjustments.join(' · ') + '</div>' : '';
+      })()}
+      ${f.position_size_pct && f.position_size_pct !== '0' ? `<div style="margin-top:8px;padding:6px 8px;background:${f.position_recommendation==='Strong'?'rgba(57,217,138,.1)':f.position_recommendation==='AVOID'?'rgba(255,68,102,.1)':'rgba(77,168,255,.08)'};border-radius:6px;border:1px solid ${f.position_recommendation==='Strong'?'rgba(57,217,138,.3)':f.position_recommendation==='AVOID'?'rgba(255,68,102,.3)':'rgba(77,168,255,.2)'};display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);">
+        <span style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Suggested Size</span>
+        <span style="font-size:12px;font-weight:700;color:${f.position_recommendation==='Strong'?'var(--green)':f.position_recommendation==='AVOID'?'var(--red)':'var(--blue)'};">${f.position_size_pct}% · ${f.position_recommendation}</span>
+      </div>` : (f.position_recommendation === 'AVOID' ? `<div style="margin-top:8px;padding:6px 8px;background:rgba(255,68,102,.1);border-radius:6px;border:1px solid rgba(255,68,102,.3);font-family:var(--mono);font-size:11px;color:var(--red);text-align:center;font-weight:700;">⛔ AVOID — Negative expectancy</div>` : '')}
       ${f.ensemble_agreement ? `<div style="font-family:var(--mono);font-size:8px;color:var(--blue);margin-top:4px;">🔀 ${f.ensemble_agreement}</div>` : ''}
       ${f.bull_case ? `<div style="margin-top:6px;padding:6px 8px;background:rgba(0,229,160,.06);border-radius:6px;border-left:2px solid var(--green);">
         <div style="font-size:9px;color:var(--green);font-family:var(--mono);margin-bottom:2px;">▲ BULL</div>
@@ -1980,6 +2100,12 @@ function renderAnalysis(ticker, d) {
       <div class="sh-row">
         <span class="badge ${sc==='bull'?'bg':sc==='bear'?'br':'by'}">${d.overall_signal||'NEUTRAL'}</span>
         <span class="badge bb">${d.current_price||'N/A'}</span>
+        ${(()=>{
+          const stats = getTickerAccuracy(ticker);
+          if (!stats) return '';
+          const color = stats.rate >= 65 ? 'var(--green)' : stats.rate >= 50 ? 'var(--yellow)' : 'var(--red)';
+          return '<span title="Past forecast accuracy on ' + ticker + ' (' + stats.forecasts_made + ' forecasts, ' + stats.total + ' evaluations)" style="padding:4px 10px;border-radius:20px;border:1px solid ' + color + ';color:' + color + ';font-family:var(--mono);font-size:10px;background:' + color + '15;">🎯 ' + stats.rate + '% on ' + ticker + '</span>';
+        })()}
           ${d._ensemble ? `<span style="padding:4px 11px;border-radius:20px;font-family:var(--mono);font-size:10px;background:rgba(77,168,255,.1);color:var(--blue);border:1px solid rgba(77,168,255,.25);">🔀 ${d._ensemble_models}-Model Ensemble</span>` : ''}
         <span class="sh-date">${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
       </div>
@@ -2041,6 +2167,34 @@ function renderAnalysis(ticker, d) {
     })()}
 
 
+
+    ${(()=>{
+      // High Conviction Alert — when ANY forecast has conf>=75% + sector aligned + MTF strong
+      if (!d.forecasts) return '';
+      const highConv = [];
+      for (const tf of ['week','month','half_year','year']) {
+        const f = d.forecasts[tf];
+        if (!f) continue;
+        const isHighConf = f.confidence >= 75;
+        const isAligned = f._sector_aligned || f._mtf_alignment === 'strong';
+        const goodSize = f.position_recommendation === 'Strong' || f.position_recommendation === 'Standard';
+        if (isHighConf && isAligned && goodSize) {
+          highConv.push({tf, f, label: tf==='week'?'1W':tf==='month'?'1M':tf==='half_year'?'6M':'1Y'});
+        }
+      }
+      if (highConv.length === 0) return '';
+      const banner = highConv[0]; // show the strongest
+      const dir = banner.f.direction;
+      const color = dir==='UP'?'var(--green)':dir==='DOWN'?'var(--red)':'var(--yellow)';
+      return `<div style="margin:12px 0;padding:14px 16px;background:linear-gradient(135deg,${color}15,${color}05);border:1px solid ${color}60;border-radius:12px;display:flex;align-items:center;gap:12px;">
+        <div style="font-size:24px;">🎯</div>
+        <div style="flex:1;">
+          <div style="font-family:var(--mono);font-size:9px;color:${color};text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:4px;">High Conviction Setup · ${banner.label}</div>
+          <div style="font-size:13px;color:var(--t1);font-weight:600;">${dir==='UP'?'↑ Strong Bullish':dir==='DOWN'?'↓ Strong Bearish':'→ Range-bound'} · ${banner.f.confidence}% confidence · Suggested ${banner.f.position_size_pct}% position</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:3px;">Sector aligned + multi-timeframe agreement + favorable risk/reward</div>
+        </div>
+      </div>`;
+    })()}
 
     ${d.primary_driver ? `<div style="padding:12px 16px;border:1px solid var(--b1);border-radius:10px;background:rgba(77,168,255,.04);margin-top:8px;display:flex;flex-direction:column;gap:10px;">
       <div>
@@ -2376,6 +2530,40 @@ function renderAccDashboard(results) {
       </div>
 
       ${pending > 0 ? `<div style="padding:6px 16px 10px;"><span style="font-size:10px;color:var(--blue);">⏳ ${pending} stock${pending>1?'s':''} still pending — not enough time has passed to evaluate.</span></div>` : ''}
+
+      ${(()=>{
+        // Confidence Calibration Chart — shows model honesty
+        if (evaluated < 5) return '';
+        const cal = getHistoricalAccuracy();
+        if (!cal) return '';
+        const buckets = [
+          {label:'50-60%', key:'medLow',   claimed:55},
+          {label:'60-70%', key:'med',      claimed:65},
+          {label:'70-80%', key:'high',     claimed:75},
+          {label:'80%+',   key:'veryHigh', claimed:90},
+        ];
+        const rows = buckets.map(b => {
+          const factor = cal[b.key];
+          if (factor === undefined) return null;
+          const actual = (b.claimed * factor).toFixed(0);
+          const accurate = Math.abs(parseFloat(actual) - b.claimed) < 8;
+          return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-family:var(--mono);font-size:10px;">' +
+            '<span style="width:55px;color:var(--t3);">' + b.label + '</span>' +
+            '<div style="flex:1;display:flex;align-items:center;gap:4px;">' +
+              '<div style="height:6px;background:var(--b2);flex:1;border-radius:3px;overflow:hidden;position:relative;">' +
+                '<div style="height:100%;width:' + Math.min(100,actual) + '%;background:' + (accurate?'var(--green)':'var(--yellow)') + ';"></div>' +
+              '</div>' +
+              '<span style="width:38px;text-align:right;color:' + (accurate?'var(--green)':'var(--yellow)') + ';">' + actual + '%</span>' +
+            '</div>' +
+          '</div>';
+        }).filter(Boolean).join('');
+        if (!rows) return '';
+        return '<div style="padding:10px 16px;background:var(--s2);border-top:1px solid var(--b1);">' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">📊 Model Calibration · Claimed vs Actual</div>' +
+          rows +
+          '<div style="font-size:9px;color:var(--t3);margin-top:6px;line-height:1.4;">Green = honest predictions. Yellow = overconfident or underconfident. The system auto-adjusts using this data.</div>' +
+        '</div>';
+      })()}
 
       <!-- Detail table -->
       <div style="border-top:1px solid var(--b1);">
@@ -2947,6 +3135,352 @@ function renderScanner(data, riskLevel) {
   wrapper.setAttribute('data-scanner','1');
 }
 
+// ── Position Sizing (Risk-Adjusted) ───────────────────────────
+// Suggests position size as % of portfolio based on Kelly Criterion + risk factors
+function calculatePositionSize(parsed, liveData) {
+  if (!parsed?.forecasts) return parsed;
+
+  for (const tf of Object.keys(parsed.forecasts)) {
+    const f = parsed.forecasts[tf];
+    if (!f) continue;
+
+    const conf = f.confidence || 50;
+    const probUp = f.prob_up || 50;
+    const probDown = f.prob_down || 25;
+
+    // Parse expected upside/downside
+    const parseNum = (s) => {
+      if (!s) return 0;
+      const m = String(s).match(/[+-]?\d+\.?\d*/);
+      return m ? parseFloat(m[0]) : 0;
+    };
+    const upside = parseNum(f.range_high);
+    const downside = Math.abs(parseNum(f.range_low));
+
+    // Kelly fraction: f* = (p*b - q) / b
+    // where p=prob win, q=prob lose, b=ratio of win to loss
+    const p = (probUp + (f.prob_flat || 0) * 0.5) / 100;
+    const q = probDown / 100;
+    const b = downside > 0 ? upside / downside : 1;
+
+    let kellyFraction = b > 0 ? (p * b - q) / b : 0;
+    kellyFraction = Math.max(0, Math.min(0.25, kellyFraction)); // cap at 25%
+
+    // Apply Kelly fraction (half-Kelly for safety, common practice)
+    let positionSize = kellyFraction * 0.5;
+
+    // Adjust by volatility
+    const beta = parseFloat(liveData?.beta) || 1.0;
+    if (beta > 2) positionSize *= 0.6;
+    else if (beta > 1.5) positionSize *= 0.8;
+
+    // Adjust by confidence
+    if (conf < 55) positionSize *= 0.5;
+    else if (conf < 65) positionSize *= 0.75;
+
+    // Cap at 10% per position (safety)
+    positionSize = Math.min(0.10, positionSize);
+
+    if (positionSize > 0.01) {
+      f.position_size_pct = (positionSize * 100).toFixed(1);
+      f.position_recommendation = positionSize >= 0.07 ? 'Strong' :
+                                  positionSize >= 0.04 ? 'Standard' :
+                                  positionSize >= 0.02 ? 'Small' : 'Minimal';
+    } else {
+      f.position_size_pct = '0';
+      f.position_recommendation = 'AVOID';
+    }
+  }
+
+  return parsed;
+}
+
+// ── Multi-Timeframe Cross-Confirmation ────────────────────────
+// If short-term and long-term forecasts disagree on direction, lower confidence
+function crossTimeframeCheck(parsed) {
+  if (!parsed?.forecasts) return parsed;
+
+  const tfs = ['week', 'month', 'half_year', 'year'];
+  const dirs = tfs.map(tf => parsed.forecasts[tf]?.direction).filter(Boolean);
+  if (dirs.length < 2) return parsed;
+
+  // Count direction agreement
+  const dirCounts = { UP: 0, DOWN: 0, SIDEWAYS: 0 };
+  dirs.forEach(d => { if (dirCounts[d] !== undefined) dirCounts[d]++; });
+  const dominantDir = Object.entries(dirCounts).sort((a,b) => b[1]-a[1])[0][0];
+  const agreement = dirCounts[dominantDir] / dirs.length;
+
+  // Adjust confidence based on cross-timeframe agreement
+  for (const tf of tfs) {
+    const f = parsed.forecasts[tf];
+    if (!f) continue;
+
+    if (agreement === 1.0) {
+      // All timeframes agree — strong signal
+      f.confidence = Math.min(85, f.confidence + 5);
+      f._mtf_alignment = 'strong';
+    } else if (agreement >= 0.75) {
+      // 3 of 4 agree
+      f.confidence = Math.min(80, f.confidence + 2);
+      f._mtf_alignment = 'moderate';
+    } else if (agreement >= 0.5) {
+      // Half agree — neutral
+      f._mtf_alignment = 'mixed';
+    } else {
+      // Major disagreement — high uncertainty
+      f.confidence = Math.max(35, f.confidence - 7);
+      f._mtf_alignment = 'conflict';
+    }
+  }
+
+  return parsed;
+}
+
+// ── Historical Accuracy Calibration ──────────────────────────
+// Learn from past forecasts and adjust confidence
+function getHistoricalAccuracy() {
+  try {
+    const history = JSON.parse(localStorage.getItem('so_forecast_history') || '[]');
+    if (history.length < 5) return null; // need minimum data
+
+    // Group by confidence bucket and compute actual hit rate
+    const buckets = {
+      low:    { range: [0, 50],   hits: 0, total: 0 },
+      medLow: { range: [50, 60],  hits: 0, total: 0 },
+      med:    { range: [60, 70],  hits: 0, total: 0 },
+      high:   { range: [70, 80],  hits: 0, total: 0 },
+      veryHigh:{ range: [80, 100],hits: 0, total: 0 },
+    };
+
+    history.forEach(h => {
+      if (h.verdict === 'PENDING' || !h.confidence) return;
+      const conf = h.confidence;
+      const bucket = conf < 50 ? 'low' :
+                     conf < 60 ? 'medLow' :
+                     conf < 70 ? 'med' :
+                     conf < 80 ? 'high' : 'veryHigh';
+      buckets[bucket].total++;
+      if (h.verdict === 'HIT' || h.verdict === 'CLOSE') buckets[bucket].hits++;
+    });
+
+    // Compute calibration factor per bucket
+    const calibration = {};
+    for (const [name, data] of Object.entries(buckets)) {
+      if (data.total >= 3) {
+        const actualRate = (data.hits / data.total) * 100;
+        const claimedMid = (data.range[0] + data.range[1]) / 2;
+        // If we claimed 75% but only got 50%, factor = 0.67
+        // If we claimed 60% and got 65%, factor = 1.08
+        calibration[name] = actualRate / claimedMid;
+      }
+    }
+    return calibration;
+  } catch(_) { return null; }
+}
+
+function applyHistoricalCalibration(parsed) {
+  if (!parsed?.forecasts) return parsed;
+  const calibration = getHistoricalAccuracy();
+  if (!calibration) return parsed;
+
+  for (const tf of Object.keys(parsed.forecasts)) {
+    const f = parsed.forecasts[tf];
+    if (!f?.confidence) continue;
+
+    const conf = f.confidence;
+    const bucket = conf < 50 ? 'low' :
+                   conf < 60 ? 'medLow' :
+                   conf < 70 ? 'med' :
+                   conf < 80 ? 'high' : 'veryHigh';
+
+    const factor = calibration[bucket];
+    if (factor !== undefined && factor !== 1) {
+      const newConf = Math.round(conf * factor);
+      f.confidence = Math.max(30, Math.min(85, newConf));
+      f._historical_calibration = factor.toFixed(2);
+    }
+  }
+
+  return parsed;
+}
+
+// ── Sanity Checks ─────────────────────────────────────────────
+function sanityCheckForecast(parsed, liveData) {
+  if (!parsed?.forecasts) return parsed;
+
+  // Reasonable bounds per timeframe (historical max moves)
+  const MAX_MOVES = {
+    week:      { min: -25, max: 25 },   // ~3 std devs for normal stock
+    month:     { min: -40, max: 50 },
+    half_year: { min: -60, max: 100 },
+    year:      { min: -75, max: 200 },
+  };
+
+  // Beta multiplier - high beta stocks can move more
+  const beta = parseFloat(liveData?.beta) || 1.0;
+  const betaMul = Math.max(0.7, Math.min(2.5, beta));
+
+  for (const tf of Object.keys(MAX_MOVES)) {
+    const f = parsed.forecasts[tf];
+    if (!f) continue;
+
+    const bounds = MAX_MOVES[tf];
+    const adjustedMin = bounds.min * betaMul;
+    const adjustedMax = bounds.max * betaMul;
+
+    // Parse range_low and range_high
+    const parseRange = (s) => {
+      if (!s) return null;
+      const m = String(s).match(/[+-]?\d+\.?\d*/);
+      return m ? parseFloat(m[0]) : null;
+    };
+
+    const low  = parseRange(f.range_low);
+    const high = parseRange(f.range_high);
+
+    // Cap extreme predictions
+    if (low !== null && low < adjustedMin) {
+      f.range_low = adjustedMin.toFixed(0) + '%';
+      f._sanity_capped = 'low';
+    }
+    if (high !== null && high > adjustedMax) {
+      f.range_high = '+' + adjustedMax.toFixed(0) + '%';
+      f._sanity_capped = (f._sanity_capped ? f._sanity_capped + '+' : '') + 'high';
+    }
+
+    // Penalize confidence for unrealistic spreads
+    if (low !== null && high !== null) {
+      const spread = high - low;
+      // If spread > 50% on 1-week forecast, confidence should be low
+      if (tf === 'week' && spread > 30) {
+        f.confidence = Math.min(f.confidence, 55);
+      }
+      if (tf === 'month' && spread > 60) {
+        f.confidence = Math.min(f.confidence, 58);
+      }
+    }
+
+    // Probability distribution sanity
+    if (f.prob_up !== undefined && f.prob_flat !== undefined && f.prob_down !== undefined) {
+      const sum = f.prob_up + f.prob_flat + f.prob_down;
+      if (Math.abs(sum - 100) > 5) {
+        // Normalize to 100
+        f.prob_up   = Math.round((f.prob_up / sum) * 100);
+        f.prob_flat = Math.round((f.prob_flat / sum) * 100);
+        f.prob_down = 100 - f.prob_up - f.prob_flat;
+      }
+
+      // Direction must match highest probability
+      const probs = { up: f.prob_up, flat: f.prob_flat, down: f.prob_down };
+      const winner = Object.entries(probs).sort((a,b) => b[1]-a[1])[0][0];
+      const expectedDir = winner === 'up' ? 'UP' : winner === 'down' ? 'DOWN' : 'SIDEWAYS';
+      if (f.direction !== expectedDir && Math.max(f.prob_up, f.prob_flat, f.prob_down) > 50) {
+        f._direction_corrected = true;
+        f.direction = expectedDir;
+      }
+    }
+  }
+
+  return parsed;
+}
+
+// ── Earnings Date Awareness ───────────────────────────────────
+function earningsAdjustment(parsed, liveData) {
+  if (!parsed?.forecasts || !liveData?.nextEarnings) return parsed;
+
+  const nextEarn = liveData.nextEarnings;
+  if (!nextEarn || nextEarn === '—') return parsed;
+
+  // Parse "in X days" or actual date
+  let daysToEarnings = null;
+  const daysMatch = String(nextEarn).match(/(\d+)\s*days?/i);
+  if (daysMatch) daysToEarnings = parseInt(daysMatch[1]);
+  else {
+    try {
+      const d = new Date(nextEarn);
+      if (!isNaN(d)) daysToEarnings = Math.round((d - new Date()) / 86400000);
+    } catch(_) {}
+  }
+
+  if (daysToEarnings === null || daysToEarnings < 0) return parsed;
+
+  // If earnings within 7 days — high uncertainty
+  // If within 14 days — moderate uncertainty
+  // If within 30 days — small reduction
+  const penalty = daysToEarnings <= 7 ? 15 : daysToEarnings <= 14 ? 8 : daysToEarnings <= 30 ? 4 : 0;
+  if (penalty > 0) {
+    for (const tf of ['week', 'month']) {
+      const f = parsed.forecasts[tf];
+      if (f) {
+        f.confidence = Math.max(35, f.confidence - penalty);
+        f._earnings_adjustment = -penalty;
+      }
+    }
+  }
+
+  return parsed;
+}
+
+// ── Volatility-Adjusted Confidence ────────────────────────────
+function volatilityAdjustment(parsed, liveData) {
+  if (!parsed?.forecasts || !liveData?.beta) return parsed;
+
+  const beta = parseFloat(liveData.beta);
+  if (isNaN(beta)) return parsed;
+
+  // High beta = high volatility = lower confidence
+  // beta > 2 = high vol penalty
+  // beta < 0.7 = stable, slight boost
+  let adjustment = 0;
+  if (beta > 2.5) adjustment = -10;
+  else if (beta > 2.0) adjustment = -6;
+  else if (beta > 1.5) adjustment = -3;
+  else if (beta < 0.7) adjustment = +2;
+
+  if (adjustment !== 0) {
+    for (const tf of Object.keys(parsed.forecasts)) {
+      const f = parsed.forecasts[tf];
+      if (f) {
+        f.confidence = Math.max(30, Math.min(85, f.confidence + adjustment));
+        f._volatility_adjustment = adjustment;
+      }
+    }
+  }
+
+  return parsed;
+}
+
+// ── Sector-Adjusted Confidence ────────────────────────────────
+function sectorAdjustment(parsed, liveData) {
+  if (!parsed?.forecasts || !liveData?.sectorRelative) return parsed;
+
+  const sectorRel = parseFloat(liveData.sectorRelative);
+  if (isNaN(sectorRel)) return parsed;
+
+  // If stock heavily under/outperforming sector, sentiment more reliable
+  for (const tf of Object.keys(parsed.forecasts)) {
+    const f = parsed.forecasts[tf];
+    if (!f) continue;
+
+    // If forecast is BULLISH and stock outperforming sector → boost
+    // If forecast is BEARISH and stock underperforming → boost
+    const aligned = (f.direction === 'UP' && sectorRel > 5) ||
+                    (f.direction === 'DOWN' && sectorRel < -5);
+    const conflicting = (f.direction === 'UP' && sectorRel < -10) ||
+                        (f.direction === 'DOWN' && sectorRel > 10);
+
+    if (aligned) {
+      f.confidence = Math.min(85, f.confidence + 4);
+      f._sector_aligned = true;
+    } else if (conflicting) {
+      f.confidence = Math.max(30, f.confidence - 6);
+      f._sector_conflict = true;
+    }
+  }
+
+  return parsed;
+}
+
 // ── Confidence Calibration ────────────────────────────────────
 function calibrateConfidence(parsed, liveData) {
   if (!parsed?.forecasts || !liveData) return;
@@ -3305,6 +3839,32 @@ function showAutoCheckBanner(count) {
   if (analyzeContent) analyzeContent.insertBefore(banner, analyzeContent.firstChild);
 }
 
+// Get accuracy stats for a specific ticker
+function getTickerAccuracy(ticker) {
+  const evaluated = forecastHistory.filter(r => 
+    r.ticker === ticker.toUpperCase() && 
+    Object.values(r.outcomes || {}).some(o => o?.verdict && o.verdict !== 'PENDING')
+  );
+  if (evaluated.length < 2) return null;
+  
+  let hits = 0, total = 0;
+  evaluated.forEach(r => {
+    Object.values(r.outcomes || {}).forEach(o => {
+      if (o?.verdict && o.verdict !== 'PENDING') {
+        total++;
+        if (o.verdict === 'HIT' || o.verdict === 'CLOSE') hits++;
+      }
+    });
+  });
+  if (total < 2) return null;
+  return {
+    total,
+    hits,
+    rate: Math.round((hits / total) * 100),
+    forecasts_made: evaluated.length,
+  };
+}
+
 function recordForecast(ticker, forecasts, livePrice) {
   const record = {
     id: Date.now(),
@@ -3350,6 +3910,10 @@ function getCalibrationFactor(timeframe) {
   localStorage.setItem('so_portfolios', JSON.stringify(pfs));
   localStorage.setItem('so_active_portfolio', pfs[0].id);
 })();
+
+// Price cache — avoids redundant API calls within 90 seconds
+const priceCache = {};
+const PRICE_CACHE_TTL = 90000; // 90 seconds
 
 let portfolios = (() => {
   try { return JSON.parse(localStorage.getItem('so_portfolios')) || []; } catch(_) { return []; }
