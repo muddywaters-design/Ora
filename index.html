@@ -2920,21 +2920,88 @@ function renderAccuracy(ticker, data) {
 
 // ── Fear & Greed widget ───────────────────────────────────────
 // ── WSB Top 5 ─────────────────────────────────────────────────
+// ── Fetch real WSB data from ApeWisdom API ───────────────────
+async function fetchApeWisdom() {
+  // ApeWisdom — real Reddit WSB sentiment tracker, free public API
+  const url = 'https://apewisdom.io/api/v1.0/filter/wallstreetbets';
+  const proxies = [
+    '',  // try direct first (sometimes CORS allowed)
+    'https://corsproxy.io/?',
+    'https://api.allorigins.win/raw?url=',
+    'https://api.codetabs.com/v1/proxy?quest=',
+  ];
+  for (const proxy of proxies) {
+    try {
+      const fullUrl = proxy ? proxy + encodeURIComponent(url) : url;
+      const r = await fetch(fullUrl, { signal: AbortSignal.timeout(6000) });
+      if (!r.ok) continue;
+      const data = await r.json();
+      if (data?.results?.length > 0) return data.results;
+    } catch(_) { continue; }
+  }
+  return null;
+}
+
 async function showWSB() {
   const btn = document.getElementById('wsbBtn2');
   btn.textContent = '⏳ Loading…'; btn.disabled = true;
   try {
-    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-    const prompt = `${d}. Based on your knowledge, what are the 5 most discussed stocks on r/WallStreetBets recently? Start your response with { and end with }. Output ONLY this JSON object, no other text before or after:
-{"tickers":[{"rank":1,"ticker":"REAL_TICKER","company":"Real Company","mentions":"~500","sentiment":"Bullish","sentiment_pct":82,"top_thesis":"One sentence about why WSB is excited.","heat":"🔥🔥🔥"},{"rank":2,"ticker":"REAL_TICKER","company":"Real Company","mentions":"~350","sentiment":"Mixed","sentiment_pct":55,"top_thesis":"One sentence.","heat":"🔥🔥"},{"rank":3,"ticker":"REAL_TICKER","company":"Real Company","mentions":"~280","sentiment":"Bullish","sentiment_pct":70,"top_thesis":"One sentence.","heat":"🔥🔥"},{"rank":4,"ticker":"REAL_TICKER","company":"Real Company","mentions":"~200","sentiment":"Bullish","sentiment_pct":65,"top_thesis":"One sentence.","heat":"🔥"},{"rank":5,"ticker":"REAL_TICKER","company":"Real Company","mentions":"~150","sentiment":"Bullish","sentiment_pct":60,"top_thesis":"One sentence.","heat":"🔥"}]}`;
+    // Fetch REAL data from ApeWisdom
+    const wsbResults = await fetchApeWisdom();
+    if (!wsbResults || wsbResults.length === 0) {
+      throw new Error('Could not fetch WSB data — ApeWisdom API may be down. Try again in a moment.');
+    }
 
-    const raw = await toJSON(prompt);
-    const data = extractJSON(raw);
+    // Take top 5
+    const top5 = wsbResults.slice(0, 5);
+
+    // Determine sentiment & heat based on rank trend
+    const data = {
+      tickers: top5.map(t => {
+        const rank = parseInt(t.rank);
+        const rank24h = parseInt(t.rank_24h_ago) || rank;
+        const mentions = parseInt(t.mentions) || 0;
+        const mentions24h = parseInt(t.mentions_24h_ago) || mentions;
+
+        // Sentiment based on mention growth
+        const growth = mentions24h > 0 ? ((mentions - mentions24h) / mentions24h) * 100 : 0;
+        const sentiment = growth > 50 ? 'Bullish' : growth < -30 ? 'Bearish' : 'Mixed';
+        const sentiment_pct = Math.max(40, Math.min(95, 55 + Math.round(growth / 4)));
+
+        // Heat based on mentions
+        const heat = mentions >= 500 ? '🔥🔥🔥' :
+                     mentions >= 200 ? '🔥🔥' : '🔥';
+
+        // Build thesis based on rank movement
+        let thesis;
+        if (rank24h > rank + 10) thesis = '⬆ Rising fast — moved up ' + (rank24h - rank) + ' ranks in 24h.';
+        else if (rank > rank24h + 10) thesis = '⬇ Cooling off — dropped ' + (rank - rank24h) + ' ranks in 24h.';
+        else if (mentions > mentions24h * 1.5) thesis = '📈 ' + mentions + ' mentions, up ' + Math.round(growth) + '% from yesterday.';
+        else thesis = '💬 ' + mentions + ' mentions, ' + t.upvotes + ' upvotes — consistent discussion.';
+
+        return {
+          rank,
+          ticker: t.ticker,
+          company: t.name || t.ticker,
+          mentions: mentions.toLocaleString(),
+          mentions_raw: mentions,
+          mentions_24h_ago: mentions24h,
+          upvotes: t.upvotes,
+          rank_change: rank24h - rank,
+          sentiment, sentiment_pct,
+          top_thesis: thesis,
+          heat,
+        };
+      })
+    };
 
     const rows = (data.tickers||[]).map(t => {
       const col = t.sentiment==='Bullish'?'var(--green)':t.sentiment==='Bearish'?'var(--red)':'var(--yellow)';
+      const rankIcon = t.rank_change > 0 ? '<span style="color:var(--green);font-size:10px;">▲' + t.rank_change + '</span>' : 
+                       t.rank_change < 0 ? '<span style="color:var(--red);font-size:10px;">▼' + Math.abs(t.rank_change) + '</span>' :
+                       '<span style="color:var(--t3);font-size:10px;">—</span>';
       return `<div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;gap:10px;align-items:flex-start;">
-        <div style="font-family:var(--mono);font-size:11px;color:var(--t3);padding-top:2px;width:18px;flex-shrink:0;">#${t.rank}</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--t3);padding-top:2px;width:24px;flex-shrink:0;">#${t.rank}</div>
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
             <span onclick="document.getElementById('tickerInput').value='${t.ticker}';runAnalysis('${t.ticker}')"
@@ -2943,9 +3010,11 @@ async function showWSB() {
             <span style="font-size:14px;flex-shrink:0;">${t.heat}</span>
           </div>
           <div style="font-size:11px;color:var(--t2);margin-bottom:4px;line-height:1.4;">${t.top_thesis}</div>
-          <div style="display:flex;gap:10px;">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <span style="font-family:var(--mono);font-size:9px;color:var(--t3);">${t.mentions} mentions</span>
-            <span style="font-family:var(--mono);font-size:9px;color:${col};font-weight:700;">${t.sentiment} ${t.sentiment_pct}%</span>
+            <span style="font-family:var(--mono);font-size:9px;color:var(--t3);">${t.upvotes} upvotes</span>
+            ${rankIcon}
+            <span style="font-family:var(--mono);font-size:9px;color:${col};font-weight:700;">${t.sentiment}</span>
           </div>
         </div>
       </div>`;
@@ -2956,8 +3025,8 @@ async function showWSB() {
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:18px;">🚀</span>
           <div>
-            <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--orange);">r/WallStreetBets · Top 5</div>
-            <div style="font-size:10px;color:var(--t3);">Last 48 hours · Tap ticker to analyze</div>
+            <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--orange);">r/WallStreetBets · Top 5 <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;margin-left:4px;">LIVE</span></div>
+            <div style="font-size:10px;color:var(--t3);">Real mentions · ApeWisdom API · Tap ticker to analyze</div>
           </div>
         </div>
         <button onclick="this.closest('[data-wsb-widget]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
