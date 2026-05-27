@@ -3098,41 +3098,270 @@ function showScanner() {
   content.insertBefore(wrapper, content.firstChild);
 }
 
+// === HYBRID OPPORTUNITY SCANNER ===
+// Real-data based scanner:
+//   1. Fetch top trending stocks from ApeWisdom (real Reddit data)
+//   2. For each candidate, fetch real RSI/Volume/Change from Yahoo
+//   3. Score by risk-appropriate signals
+//   4. Send top 8 with REAL data to Claude for analysis (no guessing)
+
+async function fetchTrendingPool() {
+  // Combine WSB + general stocks + options for diverse pool
+  const urls = [
+    'https://apewisdom.io/api/v1.0/filter/wallstreetbets',
+    'https://apewisdom.io/api/v1.0/filter/stocks',
+    'https://apewisdom.io/api/v1.0/filter/options',
+  ];
+  const proxies = ['', 'https://corsproxy.io/?', 'https://api.allorigins.win/raw?url='];
+
+  const allTickers = new Map(); // ticker -> {mentions, name, sources}
+
+  for (const url of urls) {
+    for (const proxy of proxies) {
+      try {
+        const fullUrl = proxy ? proxy + encodeURIComponent(url) : url;
+        const r = await fetch(fullUrl, { signal: AbortSignal.timeout(5000) });
+        if (!r.ok) continue;
+        const data = await r.json();
+        const results = data?.results || [];
+
+        for (const t of results.slice(0, 30)) {
+          const ticker = t.ticker;
+          if (!ticker || ticker.length > 5) continue;
+          const mentions = parseInt(t.mentions) || 0;
+          const upvotes = parseInt(t.upvotes) || 0;
+          const rank24h = parseInt(t.rank_24h_ago) || parseInt(t.rank) || 999;
+          const rank = parseInt(t.rank);
+          const trend = rank24h - rank; // positive = rising
+
+          const existing = allTickers.get(ticker);
+          if (existing) {
+            existing.mentions += mentions;
+            existing.upvotes += upvotes;
+            existing.trend = Math.max(existing.trend, trend);
+            existing.sources.push(url.split('/').pop());
+          } else {
+            allTickers.set(ticker, {
+              ticker, name: t.name || ticker, mentions, upvotes, trend,
+              sources: [url.split('/').pop()]
+            });
+          }
+        }
+        break; // success — move to next URL
+      } catch(_) { continue; }
+    }
+  }
+  return Array.from(allTickers.values()).sort((a,b) => b.mentions - a.mentions);
+}
+
+async function scoreCandidate(t) {
+  // Fetch real market data
+  const live = await fetchLivePrice(t.ticker);
+  if (!live?.price) return null;
+
+  const score = {
+    ticker: t.ticker,
+    company: t.name,
+    price: parseFloat(live.price),
+    change: parseFloat(live.changePct || 0),
+    rsi: parseFloat(live.rsi) || null,
+    volRatio: parseFloat(live.volumeRatio) || null,
+    volSignal: live.volumeSignal || '',
+    beta: parseFloat(live.beta) || null,
+    pe: parseFloat(live.pe) || null,
+    marketCap: live.marketCap,
+    weekPos52: parseFloat(live.weekPos52) || null,
+    sectorRel: parseFloat(live.sectorRelative) || null,
+    dividendYield: parseFloat(live.dividendYield) || null,
+    macd: parseFloat(live.macd) || null,
+    macdSignal: parseFloat(live.macdSignal) || null,
+    nextEarnings: live.nextEarnings,
+    // From ApeWisdom
+    mentions: t.mentions,
+    upvotes: t.upvotes,
+    redditTrend: t.trend,
+    sources: t.sources,
+    // To be calculated:
+    signals: [],
+    rawScore: 0,
+  };
+
+  // Build signal list (REAL signals from real data)
+  if (score.rsi !== null) {
+    if (score.rsi < 35) score.signals.push({label: 'Oversold RSI ' + score.rsi.toFixed(0), pts: 15, type: 'reversal'});
+    else if (score.rsi >= 40 && score.rsi <= 55) score.signals.push({label: 'Healthy RSI ' + score.rsi.toFixed(0), pts: 8, type: 'momentum'});
+    else if (score.rsi > 70) score.signals.push({label: 'Overbought RSI ' + score.rsi.toFixed(0), pts: -5, type: 'warning'});
+  }
+  if (score.volRatio && score.volRatio >= 2) {
+    score.signals.push({label: 'Volume Spike ' + score.volRatio.toFixed(1) + 'x', pts: 20, type: 'volume'});
+  } else if (score.volRatio && score.volRatio >= 1.5) {
+    score.signals.push({label: 'Elevated Volume ' + score.volRatio.toFixed(1) + 'x', pts: 10, type: 'volume'});
+  }
+  if (score.macd !== null && score.macdSignal !== null) {
+    if (score.macd > score.macdSignal && score.macd > 0) score.signals.push({label: 'MACD Bullish Cross', pts: 10, type: 'momentum'});
+    else if (score.macd < score.macdSignal && score.macd < 0) score.signals.push({label: 'MACD Bearish', pts: -8, type: 'warning'});
+  }
+  if (score.weekPos52 !== null) {
+    if (score.weekPos52 > 90) score.signals.push({label: 'Near 52W High', pts: 8, type: 'momentum'});
+    else if (score.weekPos52 < 20) score.signals.push({label: 'Near 52W Low', pts: 12, type: 'reversal'});
+  }
+  if (score.sectorRel !== null) {
+    if (score.sectorRel > 10) score.signals.push({label: 'Strong RS +' + score.sectorRel.toFixed(0) + '% vs sector', pts: 12, type: 'momentum'});
+    else if (score.sectorRel < -10) score.signals.push({label: 'Weak RS ' + score.sectorRel.toFixed(0) + '% vs sector', pts: -5, type: 'warning'});
+  }
+  if (score.mentions >= 200) score.signals.push({label: 'High Reddit interest (' + score.mentions + ' mentions)', pts: 8, type: 'sentiment'});
+  if (score.redditTrend > 20) score.signals.push({label: 'Rising fast on Reddit (+' + score.redditTrend + ' ranks)', pts: 10, type: 'sentiment'});
+
+  score.rawScore = score.signals.reduce((sum, s) => sum + s.pts, 0);
+  return score;
+}
+
+function filterByRisk(candidates, riskLevel) {
+  return candidates.filter(c => {
+    if (!c) return false;
+    switch (riskLevel) {
+      case 'conservative':
+        // Low beta, dividend, large cap, not overbought
+        if (c.beta && c.beta > 1.2) return false;
+        if (c.rsi && c.rsi > 70) return false;
+        return true;
+      case 'moderate':
+        // Healthy momentum, decent fundamentals
+        if (c.beta && c.beta > 1.8) return false;
+        if (c.rsi && (c.rsi < 30 || c.rsi > 75)) return false;
+        return true;
+      case 'aggressive':
+        // Momentum + volume signals
+        const hasVolume = c.signals.some(s => s.type === 'volume');
+        const hasMomentum = c.signals.some(s => s.type === 'momentum');
+        return hasVolume || hasMomentum;
+      case 'speculative':
+        // Reversal candidates + Reddit interest
+        const hasReversal = c.signals.some(s => s.type === 'reversal');
+        const hasSentiment = c.signals.some(s => s.type === 'sentiment');
+        return hasReversal || hasSentiment;
+      case 'yolo':
+        // Volume spike + high beta + reddit interest
+        if (c.beta && c.beta < 1.5) return false;
+        return c.signals.length >= 2;
+      default:
+        return true;
+    }
+  });
+}
+
 async function runScanner(riskLevel) {
   const picker = document.getElementById('scannerRiskPicker');
   if (!picker) return;
 
   const riskLabels = {
-    conservative:'Conservative (low beta, dividend, value)',
-    moderate:'Moderate (growth, strong fundamentals)',
-    aggressive:'Aggressive (high momentum, breakout candidates)',
-    speculative:'Speculative (small/mid cap, catalyst-driven)',
-    yolo:'YOLO (high short interest, squeeze potential, volatile)',
+    conservative:'Conservative (low beta, stable)',
+    moderate:'Moderate (balanced growth)',
+    aggressive:'Aggressive (high momentum)',
+    speculative:'Speculative (small/mid cap)',
+    yolo:'YOLO (high risk/reward)',
   };
 
+  // Step 1: Show progress
   picker.innerHTML = `
     <div style="padding:20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;">
-      <div style="font-family:var(--mono);font-size:13px;color:var(--green);">⚡ Scanning for ${riskLabels[riskLevel]}…</div>
-      <div style="width:160px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;">
-        <div style="height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:1px;animation:la 1.5s ease-in-out infinite;"></div>
+      <div style="font-family:var(--mono);font-size:13px;color:var(--green);">⚡ ${riskLabels[riskLevel]}</div>
+      <div id="scanStep" style="font-size:11px;color:var(--t2);">Step 1/4: Fetching trending stocks from Reddit…</div>
+      <div style="width:200px;height:3px;background:var(--b2);border-radius:2px;overflow:hidden;">
+        <div id="scanProgress" style="height:100%;width:0%;background:linear-gradient(90deg,var(--green),var(--blue));transition:width .5s;"></div>
       </div>
-      <div style="font-size:10px;color:var(--t3);">Analyzing signals: RSI, Volume, Earnings, Short Interest, Momentum…</div>
+      <div style="font-size:9px;color:var(--t3);">All signals from real data · No AI guessing</div>
     </div>`;
 
-  const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  const prompt = `${d}. You are a quantitative analyst. Identify 5 stocks that show pre-move signals and are likely to move up significantly soon, suitable for a ${riskLabels[riskLevel]} investor.
-
-For each stock, evaluate: RSI recovery from oversold, unusual volume, positive earnings surprise, analyst upgrades, short squeeze setup, momentum breakout, or sector rotation.
-
-Start with { end with }. Output ONLY this JSON:
-{"risk_level":"${riskLevel}","generated":"${d}","disclaimer":"AI analysis only — not financial advice. Always do your own research.","stocks":[{"rank":1,"ticker":"REAL_TICKER","company":"Real Company Name","current_price":"~$XX","signal_type":"Volume Spike + RSI Recovery","signal_strength":85,"why_now":"2 sentences explaining specific pre-move signals right now.","catalysts":"Upcoming catalyst or technical setup.","target_1w":"~$XX","target_1m":"~$XX","risk":"Main risk in one sentence.","confidence":72},{"rank":2,"ticker":"REAL_TICKER","company":"Real Company","current_price":"~$XX","signal_type":"Earnings Surprise + Momentum","signal_strength":78,"why_now":"2 sentences.","catalysts":"Catalyst.","target_1w":"~$XX","target_1m":"~$XX","risk":"Risk.","confidence":65},{"rank":3,"ticker":"REAL_TICKER","company":"Real Company","current_price":"~$XX","signal_type":"Short Squeeze Setup","signal_strength":71,"why_now":"2 sentences.","catalysts":"Catalyst.","target_1w":"~$XX","target_1m":"~$XX","risk":"Risk.","confidence":60},{"rank":4,"ticker":"REAL_TICKER","company":"Real Company","current_price":"~$XX","signal_type":"Analyst Upgrade + Breakout","signal_strength":68,"why_now":"2 sentences.","catalysts":"Catalyst.","target_1w":"~$XX","target_1m":"~$XX","risk":"Risk.","confidence":58},{"rank":5,"ticker":"REAL_TICKER","company":"Real Company","current_price":"~$XX","signal_type":"Sector Rotation Play","signal_strength":62,"why_now":"2 sentences.","catalysts":"Catalyst.","target_1w":"~$XX","target_1m":"~$XX","risk":"Risk.","confidence":55}]}`;
+  const setStep = (n, msg) => {
+    const stepEl = document.getElementById('scanStep');
+    const progEl = document.getElementById('scanProgress');
+    if (stepEl) stepEl.textContent = 'Step ' + n + '/4: ' + msg;
+    if (progEl) progEl.style.width = (n * 25) + '%';
+  };
 
   try {
+    // Step 1: Fetch trending pool
+    const pool = await fetchTrendingPool();
+    if (!pool || pool.length === 0) {
+      throw new Error('Could not fetch trending stocks pool — Reddit data sources may be down.');
+    }
+
+    // Step 2: Score top ~20 candidates with real market data
+    setStep(2, 'Analyzing real market data for ' + Math.min(20, pool.length) + ' candidates…');
+    const top20 = pool.slice(0, 20);
+    const scoredResults = await Promise.allSettled(top20.map(t => scoreCandidate(t)));
+    const scored = scoredResults
+      .filter(r => r.status === 'fulfilled' && r.value)
+      .map(r => r.value);
+
+    if (scored.length === 0) {
+      throw new Error('Could not fetch market data for any candidate.');
+    }
+
+    // Step 3: Filter by risk + sort by score
+    setStep(3, 'Filtering by risk profile…');
+    const filtered = filterByRisk(scored, riskLevel)
+      .sort((a, b) => b.rawScore - a.rawScore)
+      .slice(0, 8);
+
+    if (filtered.length === 0) {
+      throw new Error('No stocks matched ' + riskLevel + ' criteria from current trending pool. Try a different risk level.');
+    }
+
+    // Step 4: Get Claude analysis for top 5 with REAL data
+    setStep(4, 'Getting expert analysis on top ' + Math.min(5, filtered.length) + ' picks…');
+    const top5 = filtered.slice(0, 5);
+
+    // Build a fact-based prompt with real data
+    const candidatesData = top5.map(s =>
+      `${s.ticker} (${s.company}): $${s.price.toFixed(2)}, change ${s.change>=0?'+':''}${s.change.toFixed(2)}%, ` +
+      `RSI=${s.rsi?.toFixed(0)||'—'}, Vol=${s.volRatio?s.volRatio.toFixed(1)+'x':'—'}, ` +
+      `beta=${s.beta?.toFixed(2)||'—'}, 52W pos=${s.weekPos52?s.weekPos52.toFixed(0)+'%':'—'}, ` +
+      `Sector RS=${s.sectorRel?(s.sectorRel>=0?'+':'')+s.sectorRel.toFixed(1)+'%':'—'}, ` +
+      `Reddit=${s.mentions} mentions. Signals: ${s.signals.map(x=>x.label).join('; ')||'none'}.`
+    ).join('\n');
+
+    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const prompt = `${d}. Analyze these REAL stocks selected for ${riskLabels[riskLevel]} investor based on actual market data:\n\n${candidatesData}\n\nFor each, provide WHY NOW analysis and risks. Use ONLY the real data provided — do NOT invent signals. Output ONLY JSON:\n{"risk_level":"${riskLevel}","generated":"${d}","disclaimer":"Real data analysis · Not financial advice","stocks":[{"ticker":"TICKER","why_now":"2 sentences based on actual signals.","catalysts":"Catalyst or setup.","target_1w":"~$XX","target_1m":"~$XX","risk":"Main risk.","confidence":68}]}`;
+
     const raw = await toJSON(prompt);
-    const data = extractJSON(raw);
-    renderScanner(data, riskLevel);
+    const aiData = extractJSON(raw);
+
+    // Merge real data + AI analysis
+    const merged = {
+      risk_level: riskLevel,
+      generated: d,
+      disclaimer: 'Real market data · AI analysis layer · Not financial advice',
+      stocks: top5.map((real, idx) => {
+        const ai = (aiData.stocks || []).find(s => s.ticker === real.ticker) || {};
+        return {
+          rank: idx + 1,
+          ticker: real.ticker,
+          company: real.company,
+          current_price: '$' + real.price.toFixed(2),
+          change_pct: real.change,
+          signal_type: real.signals.slice(0, 2).map(s => s.label).join(' + ') || 'Trending stock',
+          signal_strength: Math.min(95, Math.max(40, 50 + real.rawScore)),
+          why_now: ai.why_now || 'Multiple real signals detected.',
+          catalysts: ai.catalysts || (real.nextEarnings && real.nextEarnings !== '—' ? 'Earnings: ' + real.nextEarnings : 'Technical setup'),
+          target_1w: ai.target_1w || '—',
+          target_1m: ai.target_1m || '—',
+          risk: ai.risk || 'See full analysis for details.',
+          confidence: ai.confidence || Math.min(80, 50 + real.signals.length * 5),
+          // Real data attached
+          _real_signals: real.signals,
+          _real_data: {
+            rsi: real.rsi, vol: real.volRatio, beta: real.beta,
+            mentions: real.mentions, sectorRel: real.sectorRel,
+          },
+        };
+      }),
+    };
+
+    renderScanner(merged, riskLevel);
   } catch(e) {
-    picker.innerHTML = `<div style="padding:16px;color:var(--red);font-size:12px;">⚠️ ${e.message}</div>`;
+    picker.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px;">⚠️ ' + e.message + '</div>';
   }
 }
 
@@ -3163,22 +3392,31 @@ function renderScanner(data, riskLevel) {
               style="font-family:var(--mono);font-size:16px;font-weight:700;color:${col};cursor:pointer;">${s.ticker}</span>
             <span style="font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.company}</span>
           </div>
-          <div style="font-size:10px;color:var(--t3);">${s.current_price}</div>
+          <div style="font-size:10px;color:var(--t3);">${s.current_price}${s.change_pct !== undefined ? ` <span style="color:${s.change_pct>=0?'var(--green)':'var(--red)'};font-family:var(--mono);">${s.change_pct>=0?'+':''}${s.change_pct.toFixed(2)}%</span>` : ''}</div>
         </div>
         <div style="text-align:right;flex-shrink:0;">
           <div style="font-family:var(--mono);font-size:9px;color:var(--t3);">CONFIDENCE</div>
           <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${col};">${s.confidence}%</div>
         </div>
       </div>
-      <div style="display:inline-block;padding:2px 8px;border-radius:20px;background:${col}18;border:1px solid ${col}40;font-family:var(--mono);font-size:9px;color:${col};margin-bottom:8px;">${s.signal_type}</div>
+      ${s._real_signals && s._real_signals.length > 0 ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">${s._real_signals.map(sig => {
+        const sigColor = sig.pts >= 15 ? 'var(--green)' : sig.pts >= 8 ? 'var(--blue)' : sig.pts > 0 ? 'var(--yellow)' : 'var(--red)';
+        return '<span style="padding:2px 7px;border-radius:20px;background:'+sigColor+'15;border:1px solid '+sigColor+'40;font-family:var(--mono);font-size:9px;color:'+sigColor+';">'+sig.label+'</span>';
+      }).join('')}</div>` : `<div style="display:inline-block;padding:2px 8px;border-radius:20px;background:${col}18;border:1px solid ${col}40;font-family:var(--mono);font-size:9px;color:${col};margin-bottom:8px;">${s.signal_type}</div>`}
       ${signalStrengthBar(s.signal_strength)}
+      ${s._real_data ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:6px;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;">
+        ${s._real_data.rsi !== null ? `<div style="text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">RSI</div><div style="font-family:var(--mono);font-size:11px;font-weight:700;color:${s._real_data.rsi<30?'var(--green)':s._real_data.rsi>70?'var(--red)':'var(--t1)'};">${s._real_data.rsi.toFixed(0)}</div></div>` : ''}
+        ${s._real_data.vol ? `<div style="text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">VOL</div><div style="font-family:var(--mono);font-size:11px;font-weight:700;color:${s._real_data.vol>=2?'var(--orange)':'var(--t1)'};">${s._real_data.vol.toFixed(1)}x</div></div>` : ''}
+        ${s._real_data.beta ? `<div style="text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">BETA</div><div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">${s._real_data.beta.toFixed(2)}</div></div>` : ''}
+        ${s._real_data.mentions ? `<div style="text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">WSB</div><div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--orange);">${s._real_data.mentions}</div></div>` : ''}
+      </div>` : ''}
       <div style="font-size:11px;color:var(--t2);margin-top:8px;line-height:1.55;">${s.why_now}</div>
-      <div style="font-size:10px;color:var(--t3);margin-top:6px;">🎯 ${s.catalysts}</div>
-      <div style="display:flex;gap:12px;margin-top:8px;">
-        <span style="font-size:10px;color:var(--t3);">1W target: <b style="color:var(--green);font-family:var(--mono);">${s.target_1w}</b></span>
-        <span style="font-size:10px;color:var(--t3);">1M target: <b style="color:var(--blue);font-family:var(--mono);">${s.target_1m}</b></span>
-      </div>
-      <div style="font-size:10px;color:var(--red);margin-top:5px;">⚠️ ${s.risk}</div>
+      ${s.catalysts && s.catalysts !== '—' ? `<div style="font-size:10px;color:var(--t3);margin-top:6px;">🎯 ${s.catalysts}</div>` : ''}
+      ${(s.target_1w !== '—' || s.target_1m !== '—') ? `<div style="display:flex;gap:12px;margin-top:8px;">
+        ${s.target_1w !== '—' ? `<span style="font-size:10px;color:var(--t3);">1W target: <b style="color:var(--green);font-family:var(--mono);">${s.target_1w}</b></span>` : ''}
+        ${s.target_1m !== '—' ? `<span style="font-size:10px;color:var(--t3);">1M target: <b style="color:var(--blue);font-family:var(--mono);">${s.target_1m}</b></span>` : ''}
+      </div>` : ''}
+      ${s.risk && s.risk !== '—' ? `<div style="font-size:10px;color:var(--red);margin-top:5px;">⚠️ ${s.risk}</div>` : ''}
     </div>`).join('');
 
   const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
@@ -3186,8 +3424,8 @@ function renderScanner(data, riskLevel) {
     <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;">
       <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
         <div>
-          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">⚡ Opportunity Scanner · ${data.risk_level?.toUpperCase()}</div>
-          <div style="font-size:10px;color:var(--t3);margin-top:2px;">Generated ${d} · Tap ticker to run full analysis</div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">⚡ Opportunity Scanner · ${data.risk_level?.toUpperCase()} <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;margin-left:4px;">REAL DATA</span></div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">${data.disclaimer || 'Tap ticker for full analysis'}</div>
         </div>
         <div style="display:flex;gap:6px;align-items:center;">
           <button onclick="showScanner()" style="background:none;border:1px solid var(--b2);color:var(--t3);cursor:pointer;font-size:9px;padding:4px 8px;border-radius:6px;font-family:var(--mono);">↺ Change</button>
