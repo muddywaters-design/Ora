@@ -3891,7 +3891,8 @@ async function showSentimentConsensus() {
       <div style="width:200px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;">
         <div style="height:100%;background:linear-gradient(90deg,var(--purple),var(--orange));border-radius:1px;animation:la 1.5s ease-in-out infinite;"></div>
       </div>
-      <div id="consensusStatus" style="font-size:11px;color:var(--t3);font-family:var(--mono);">Gathering signals from all sources…</div>
+      <div id="consensusStatus" style="font-size:11px;color:var(--t3);font-family:var(--mono);">Gathering real-time signals…</div>
+      <div style="font-size:9px;color:var(--t3);">Fear&amp;Greed + WSB + Volume — all real data</div>
     </div>`;
   content.insertBefore(wrapper, content.firstChild);
 
@@ -3900,63 +3901,160 @@ async function showSentimentConsensus() {
   try {
     const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 
-    setStatus('🧠 Asking AI for WSB + Trends + Market sentiment…');
+    // === STEP 1: Real Fear & Greed Index ===
+    setStatus('📊 Fetching real Fear & Greed Index…');
+    let fgData = null;
+    try {
+      // Alternative.me has CORS-friendly free F&G index
+      const proxies = ['', 'https://corsproxy.io/?', 'https://api.allorigins.win/raw?url='];
+      const fgUrl = 'https://api.alternative.me/fng/?limit=1';
+      for (const proxy of proxies) {
+        try {
+          const fullUrl = proxy ? proxy + encodeURIComponent(fgUrl) : fgUrl;
+          const r = await fetch(fullUrl, { signal: AbortSignal.timeout(5000) });
+          if (!r.ok) continue;
+          const data = await r.json();
+          const item = data?.data?.[0];
+          if (item) {
+            fgData = {
+              score: parseInt(item.value),
+              rating: item.value_classification,
+              source: 'Alternative.me (live)',
+            };
+            break;
+          }
+        } catch(_) { continue; }
+      }
+    } catch(_) {}
 
-    // Single Claude call for all three signals — much more reliable than APIs
-    const prompt = 'Based on your knowledge, provide current market sentiment data. Output ONLY JSON starting with { ending with }. Replace all values with real current estimates: ' +
-      '{"fear_greed":{"score":52,"rating":"Neutral","trend":"stable"},' +
-      '"wsb_tickers":[' +
-        '{"ticker":"NVDA","company":"Nvidia","sentiment_pct":82,"mentions":"~600","thesis":"AI dominance"},' +
-        '{"ticker":"TSLA","company":"Tesla","sentiment_pct":58,"mentions":"~450","thesis":"Delivery numbers"},' +
-        '{"ticker":"PLTR","company":"Palantir","sentiment_pct":74,"mentions":"~300","thesis":"AI contracts"},' +
-        '{"ticker":"AMD","company":"AMD","sentiment_pct":68,"mentions":"~250","thesis":"GPU competition"},' +
-        '{"ticker":"GME","company":"GameStop","sentiment_pct":61,"mentions":"~200","thesis":"Meme momentum"}],' +
-      '"google_trends":{' +
-        '"NVDA":{"score":85,"change":"+20","signal":"Rising"},' +
-        '"TSLA":{"score":72,"change":"-5","signal":"Stable"},' +
-        '"PLTR":{"score":65,"change":"+15","signal":"Rising"},' +
-        '"AMD":{"score":60,"change":"+5","signal":"Stable"},' +
-        '"GME":{"score":55,"change":"-10","signal":"Stable"}}}';
+    // Fallback to CNN F&G if Alternative.me failed
+    if (!fgData) {
+      try {
+        const cnnUrl = 'https://production.dataviz.cnn.io/index/fearandgreed/graphdata';
+        const proxies = ['https://corsproxy.io/?', 'https://api.allorigins.win/raw?url='];
+        for (const proxy of proxies) {
+          try {
+            const r = await fetch(proxy + encodeURIComponent(cnnUrl), { signal: AbortSignal.timeout(5000) });
+            if (!r.ok) continue;
+            const data = await r.json();
+            const score = data?.fear_and_greed?.score;
+            if (score !== undefined) {
+              fgData = {
+                score: Math.round(score),
+                rating: data.fear_and_greed.rating || (score < 25 ? 'Extreme Fear' : score < 45 ? 'Fear' : score < 55 ? 'Neutral' : score < 75 ? 'Greed' : 'Extreme Greed'),
+                source: 'CNN (live)',
+              };
+              break;
+            }
+          } catch(_) { continue; }
+        }
+      } catch(_) {}
+    }
 
-    const raw  = await toJSON(prompt);
-    const data = extractJSON(raw);
+    if (!fgData) fgData = { score: 50, rating: 'Neutral', source: 'unavailable' };
 
-    const fgData = data.fear_greed ? {
-      score:  data.fear_greed.score,
-      rating: data.fear_greed.rating,
-      source: 'AI estimate'
-    } : { score: 50, rating: 'Neutral', source: 'default' };
+    // === STEP 2: Real WSB data from ApeWisdom ===
+    setStatus('🚀 Fetching real WSB mentions…');
+    const wsbResults = await fetchApeWisdom();
+    if (!wsbResults || wsbResults.length === 0) {
+      throw new Error('Could not fetch WSB data from ApeWisdom — try again');
+    }
 
-    const wsbTickers = (data.wsb_tickers || []).map(t => ({
-      ticker:       t.ticker,
-      company:      t.company,
-      sentiment_pct: t.sentiment_pct,
-      mentions:     t.mentions,
-      thesis:       t.thesis,
-      heat:         t.sentiment_pct >= 75 ? '🔥🔥🔥' : t.sentiment_pct >= 60 ? '🔥🔥' : '🔥',
-    }));
+    // Take top 5 by mentions
+    const top5 = wsbResults.slice(0, 5);
 
-    // Score each ticker
+    // === STEP 3: Real market data for each ticker ===
+    setStatus('📈 Fetching real market data for ' + top5.length + ' tickers…');
+    const enrichedResults = await Promise.allSettled(
+      top5.map(async t => {
+        const live = await fetchLivePrice(t.ticker);
+        return { ...t, live };
+      })
+    );
+
+    const wsbTickers = enrichedResults
+      .filter(r => r.status === 'fulfilled')
+      .map(r => {
+        const t = r.value;
+        const mentions = parseInt(t.mentions) || 0;
+        const mentions24h = parseInt(t.mentions_24h_ago) || mentions;
+        const growth = mentions24h > 0 ? ((mentions - mentions24h) / mentions24h) * 100 : 0;
+
+        // Sentiment based on real growth
+        const sentiment_pct = Math.max(40, Math.min(95, 55 + Math.round(growth / 4)));
+        const heat = mentions >= 500 ? '🔥🔥🔥' : mentions >= 200 ? '🔥🔥' : '🔥';
+
+        // Real volume ratio (proxy for "trending")
+        const volRatio = parseFloat(t.live?.volumeRatio) || null;
+        const priceChange = parseFloat(t.live?.changePct) || 0;
+
+        return {
+          ticker: t.ticker,
+          company: t.name || t.ticker,
+          sentiment_pct,
+          mentions: mentions.toLocaleString(),
+          mentions_raw: mentions,
+          mentions_growth: growth,
+          thesis: growth > 50 ? 'Rising +' + Math.round(growth) + '% in mentions' :
+                  growth < -30 ? 'Cooling ' + Math.round(growth) + '%' :
+                  mentions + ' mentions, steady',
+          heat,
+          // Real market data
+          price: t.live?.price,
+          change_pct: priceChange,
+          volRatio,
+          rsi: parseFloat(t.live?.rsi) || null,
+        };
+      });
+
+    // === STEP 4: Score each ticker with REAL signals ===
+    setStatus('🎯 Computing consensus score…');
     const scored = wsbTickers.map(t => {
       let score = 0;
       const signals = [];
 
-      // WSB (40 pts)
+      // WSB Mentions (40 pts) - real
       const wsbScore = Math.round((t.sentiment_pct / 100) * 40);
       score += wsbScore;
-      signals.push({ source:'WSB', value: t.sentiment_pct + '%', points: wsbScore, bull: t.sentiment_pct >= 55 });
+      signals.push({
+        source: 'WSB Activity',
+        value: t.mentions + ' mentions' + (t.mentions_growth > 10 ? ' (+' + Math.round(t.mentions_growth) + '%)' : ''),
+        points: wsbScore,
+        bull: t.sentiment_pct >= 55,
+        real: true,
+      });
 
-      // Google Trends from Claude data (35 pts)
-      const gt = data.google_trends && data.google_trends[t.ticker];
-      const gtScore = gt ? Math.min(35, Math.max(0, Math.round(17.5 + parseFloat(gt.change||0) * 0.35))) : 17;
-      score += gtScore;
-      signals.push({ source:'Google Trends', value: gt ? gt.signal : 'Stable (est.)', points: gtScore, bull: gt ? parseFloat(gt.change||0) > 5 : true });
+      // Volume vs Average (35 pts) - real signal of attention
+      let volScore = 17;
+      let volValue = 'N/A';
+      if (t.volRatio !== null) {
+        if (t.volRatio >= 3) { volScore = 35; volValue = t.volRatio.toFixed(1) + 'x (Extreme)'; }
+        else if (t.volRatio >= 2) { volScore = 30; volValue = t.volRatio.toFixed(1) + 'x (High)'; }
+        else if (t.volRatio >= 1.5) { volScore = 22; volValue = t.volRatio.toFixed(1) + 'x (Elevated)'; }
+        else if (t.volRatio >= 1) { volScore = 15; volValue = t.volRatio.toFixed(1) + 'x (Normal)'; }
+        else { volScore = 8; volValue = t.volRatio.toFixed(1) + 'x (Low)'; }
+      }
+      score += volScore;
+      signals.push({
+        source: 'Volume vs Avg',
+        value: volValue,
+        points: volScore,
+        bull: t.volRatio !== null && t.volRatio >= 1.5,
+        real: t.volRatio !== null,
+      });
 
-      // Fear & Greed (25 pts)
+      // Fear & Greed - macro context (25 pts) - real
       const fg = fgData.score;
+      // Counter-intuitive: extreme fear = better entry, extreme greed = worse
       const fgScore = fg <= 25 ? 25 : fg <= 45 ? 20 : fg <= 55 ? 15 : fg <= 75 ? 10 : 5;
       score += fgScore;
-      signals.push({ source:'Fear & Greed', value: fgData.rating + ' (' + fg + ')', points: fgScore, bull: fg <= 55 });
+      signals.push({
+        source: 'Market Mood (F&G)',
+        value: fgData.rating + ' (' + fg + ')',
+        points: fgScore,
+        bull: fg <= 55,
+        real: fgData.source !== 'unavailable',
+      });
 
       const consensus = signals.filter(s => s.bull).length;
       return { ...t, score, signals, consensus, maxScore: 100 };
@@ -3998,11 +4096,17 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
     </div>`;
   };
 
-  const signalDots = (signals) => signals.map(s =>
-    `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:20px;font-size:9px;font-family:var(--mono);background:${s.bull?'rgba(0,229,160,.1)':'rgba(255,68,102,.1)'};border:1px solid ${s.bull?'rgba(0,229,160,.25)':'rgba(255,68,102,.25)'};color:${s.bull?'var(--green)':'var(--red)'};">
-      ${s.bull?'↑':'↓'} ${s.source}
-    </span>`
-  ).join('');
+  const signalDots = (signals) => signals.map(s => {
+    const realBadge = s.real === false ? '<span style="opacity:.5;font-size:8px;" title="Estimated">~</span>' : '';
+    return `<span title="${s.value || ''}" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:9px;font-family:var(--mono);background:${s.bull?'rgba(0,229,160,.1)':'rgba(255,68,102,.1)'};border:1px solid ${s.bull?'rgba(0,229,160,.25)':'rgba(255,68,102,.25)'};color:${s.bull?'var(--green)':'var(--red)'};">
+      ${s.bull?'↑':'↓'} ${realBadge}${s.source}
+    </span>`;
+  }).join('');
+
+  const detailedSignals = (signals) => signals.map(s => {
+    const realIcon = s.real === false ? '<span style="color:var(--t3);font-size:9px;" title="Estimated">est.</span>' : '<span style="color:var(--green);font-size:9px;" title="Live data">●</span>';
+    return '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:10px;"><span style="color:var(--t2);">' + realIcon + ' ' + s.source + '</span><span style="color:' + (s.bull?'var(--green)':'var(--red)') + ';font-family:var(--mono);">' + s.value + ' · ' + s.points + 'pts</span></div>';
+  }).join('');
 
   const rankCards = scored.map((s, i) => {
     const isTop = i === 0;
