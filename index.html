@@ -704,7 +704,7 @@ async function quickDecision() {
     const raw = await toJSON(prompt, false); // No web search for speed
     const decision = extractJSON(raw);
 
-    window._lastQuickData = { ticker, liveData, decision };
+    window._lastQuickData = { ticker, liveData, decision, lang: langMode };
   renderQuickDecision(ticker, liveData, decision);
   } catch(e) {
     const errMsg = e.message || 'Unknown error';
@@ -911,9 +911,24 @@ function toggleLang() {
   if (window.currentParsed && window.currentTicker) {
     renderAnalysis(window.currentTicker, window.currentParsed);
   }
-  // Re-render Quick Decision if showing
-  if (window._lastQuickData) {
-    renderQuickDecision(window._lastQuickData.ticker, window._lastQuickData.liveData, window._lastQuickData.decision);
+  // Quick Decision: if language changed, show re-run hint (don't re-render — can't un-translate)
+  const qr = document.getElementById('quickResult');
+  if (qr && window._lastQuickData && window._lastQuickData.lang !== langMode) {
+    // Remove any existing hint
+    const existingHint = qr.querySelector('.lang-hint');
+    if (existingHint) existingHint.remove();
+    // Add hint banner
+    const hint = document.createElement('div');
+    hint.className = 'lang-hint';
+    hint.style.cssText = 'background:rgba(77,168,255,.1);border:1px solid rgba(77,168,255,.3);border-radius:7px;padding:7px 10px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;';
+    hint.innerHTML = '<span style="color:var(--blue);font-family:var(--mono);">' + (langMode==='he' ? '🇮🇱 לחץ Decide שוב לתוצאה בעברית' : '🇺🇸 Tap Decide again for English text') + '</span>' +
+      '<button onclick="quickDecision()" style="background:var(--blue);color:var(--bg);border:none;padding:4px 10px;border-radius:5px;font-family:var(--mono);font-size:10px;cursor:pointer;font-weight:700;">Re-run</button>';
+    qr.insertBefore(hint, qr.firstChild);
+    // Update UI labels that CAN be translated (Score, labels etc)
+    // by just re-rendering with new labels but keeping Claude text as-is
+    const { ticker, liveData, decision } = window._lastQuickData;
+    window._lastQuickData.lang = langMode; // mark as current lang to avoid loop
+    renderQuickDecision(ticker, liveData, decision);
   }
   // Show hint if Hebrew but no analysis loaded yet
   if (langMode === 'he' && !window.currentParsed) {
