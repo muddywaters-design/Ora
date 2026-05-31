@@ -376,6 +376,13 @@ body.lang-he .fc-tf {
 
   <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:12px;">
 
+    <button onclick="showTopPick()" id="topPickBtn"
+      style="background:linear-gradient(135deg,rgba(57,217,138,.15),rgba(77,168,255,.1));border:1px solid rgba(57,217,138,.4);color:var(--green);padding:12px;font-family:var(--mono);font-size:11px;cursor:pointer;border-radius:10px;transition:all .15s;letter-spacing:.03em;font-weight:700;width:100%;"
+      onmouseover="this.style.borderColor='var(--green)';this.style.background='rgba(57,217,138,.25)'"
+      onmouseout="this.style.borderColor='rgba(57,217,138,.4)';this.style.background='linear-gradient(135deg,rgba(57,217,138,.15),rgba(77,168,255,.1))'">
+      🏆 TOP PICK TODAY — All Signals Green
+    </button>
+
     <button class="btn" id="wsbBtn2" onclick="showWSB()"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px;font-family:var(--mono);font-size:10px;cursor:pointer;border-radius:8px;transition:all .15s;letter-spacing:.03em;"
       onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'"
@@ -634,6 +641,275 @@ function withTimeout(promise, ms=6000) {
   return Promise.race([promise, new Promise(r => setTimeout(() => r(null), ms))]);
 }
 
+// === TOP PICK TODAY — All Signals Convergence Scanner ===
+async function showTopPick() {
+  const btn = document.getElementById('topPickBtn');
+  if (btn) { btn.textContent = '⏳ Scanning all signals...'; btn.disabled = true; }
+
+  // Rate limit check
+  if (window._rateLimitUntil && Date.now() < window._rateLimitUntil) {
+    const sec = Math.ceil((window._rateLimitUntil - Date.now()) / 1000);
+    if (btn) { btn.textContent = '🏆 TOP PICK TODAY — All Signals Green'; btn.disabled = false; }
+    alert('Rate limit — wait ' + sec + 's');
+    return;
+  }
+
+  // Remove old result
+  const oldResult = document.getElementById('topPickResult');
+  if (oldResult) { oldResult.remove(); if (btn) { btn.textContent = '🏆 TOP PICK TODAY — All Signals Green'; btn.disabled = false; } return; }
+
+  // Show progress card
+  const container = document.getElementById('analyzeContent');
+  const progress = document.createElement('div');
+  progress.id = 'topPickResult';
+  progress.style.cssText = 'padding:14px;';
+  progress.innerHTML = `
+    <div style="background:linear-gradient(135deg,var(--s1),var(--s2));border:1px solid rgba(57,217,138,.25);border-radius:14px;padding:20px;text-align:center;">
+      <div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--green);margin-bottom:12px;">🏆 Finding Today\'s Best Stock</div>
+      <div style="width:100%;height:4px;background:var(--b2);border-radius:2px;overflow:hidden;margin-bottom:10px;">
+        <div id="tpProgress" style="height:100%;width:0%;background:linear-gradient(90deg,var(--green),var(--blue));transition:width .6s;border-radius:2px;"></div>
+      </div>
+      <div id="tpStatus" style="font-size:11px;color:var(--t2);font-family:var(--mono);">Step 1/4: Fetching WSB trending stocks…</div>
+      <div style="font-size:9px;color:var(--t3);margin-top:6px;">Checking 7 signals: WSB · Volume · RSI · MACD · Sector · Analysts · Macro</div>
+    </div>`;
+  container.insertBefore(progress, container.firstChild);
+
+  const setStep = (n, msg) => {
+    const s = document.getElementById('tpStatus');
+    const p = document.getElementById('tpProgress');
+    if (s) s.textContent = 'Step ' + n + '/4: ' + msg;
+    if (p) p.style.width = (n * 25) + '%';
+  };
+
+  try {
+    // STEP 1: Get WSB trending pool
+    setStep(1, 'Fetching real WSB trending data…');
+    const wsbPool = await fetchApeWisdom();
+    if (!wsbPool || wsbPool.length === 0) throw new Error('WSB data unavailable — try again');
+    const candidates = wsbPool.slice(0, 25); // top 25 trending
+
+    // STEP 2: Fetch real market data for all candidates in parallel
+    setStep(2, 'Fetching live market data for ' + candidates.length + ' stocks…');
+    const [fgData, marketResults] = await Promise.all([
+      fetchFearGreedFromAPI(),
+      Promise.allSettled(candidates.map(t => 
+        fetchLivePrice(t.ticker).then(live => ({ wsb: t, live }))
+      ))
+    ]);
+
+    const stocks = marketResults
+      .filter(r => r.status === 'fulfilled' && r.value.live?.price)
+      .map(r => r.value);
+
+    if (stocks.length === 0) throw new Error('Could not fetch market data');
+
+    // STEP 3: Score each stock on 7 convergence signals
+    setStep(3, 'Scoring ' + stocks.length + ' stocks on 7 signals…');
+
+    const scored = stocks.map(({ wsb, live }) => {
+      const signals = [];
+      const rsi = parseFloat(live.rsi) || null;
+      const volRatio = parseFloat(live.volumeRatio) || null;
+      const macd = parseFloat(live.macd) || null;
+      const macdSig = parseFloat(live.macdSignal) || null;
+      const sectorRel = parseFloat(live.sectorRelative) || null;
+      const beta = parseFloat(live.beta) || 1;
+      const weekPos = parseFloat(live.weekPos52) || null;
+      const mentions = parseInt(wsb.mentions) || 0;
+      const mentions24h = parseInt(wsb.mentions_24h_ago) || mentions;
+      const mentionGrowth = mentions24h > 0 ? ((mentions - mentions24h) / mentions24h) * 100 : 0;
+      const rank = parseInt(wsb.rank);
+      const rank24h = parseInt(wsb.rank_24h_ago) || rank;
+      const rising = rank24h > rank + 3; // rising in WSB rankings
+
+      // 1. WSB Signal (real - ApeWisdom)
+      const wsb_bull = mentions >= 100 && (mentionGrowth > 20 || rising);
+      signals.push({ name: 'WSB Buzz', bull: wsb_bull, real: true,
+        detail: mentions + ' mentions' + (mentionGrowth > 0 ? ' +' + Math.round(mentionGrowth) + '%' : ''),
+        icon: '🚀' });
+
+      // 2. RSI signal (real - Yahoo)
+      const rsi_bull = rsi !== null && rsi >= 45 && rsi <= 68;
+      signals.push({ name: 'RSI', bull: rsi_bull, real: rsi !== null,
+        detail: rsi !== null ? rsi.toFixed(0) + (rsi < 40 ? ' oversold' : rsi > 70 ? ' overbought' : ' healthy') : 'N/A',
+        icon: '📊' });
+
+      // 3. Volume signal (real - Yahoo)
+      const vol_bull = volRatio !== null && volRatio >= 1.5;
+      signals.push({ name: 'Volume', bull: vol_bull, real: volRatio !== null,
+        detail: volRatio !== null ? volRatio.toFixed(1) + 'x avg' : 'N/A',
+        icon: '📈' });
+
+      // 4. MACD signal (real - Yahoo)
+      const macd_bull = macd !== null && macdSig !== null && macd > macdSig;
+      signals.push({ name: 'MACD', bull: macd_bull, real: macd !== null,
+        detail: macd !== null ? (macd > macdSig ? 'Bullish cross' : 'Bearish') : 'N/A',
+        icon: '⚡' });
+
+      // 5. Sector Relative Strength (real - Yahoo)
+      const sector_bull = sectorRel !== null && sectorRel > 3;
+      signals.push({ name: 'Sector RS', bull: sector_bull, real: sectorRel !== null,
+        detail: sectorRel !== null ? (sectorRel >= 0 ? '+' : '') + sectorRel.toFixed(1) + '% vs sector' : 'N/A',
+        icon: '🏭' });
+
+      // 6. Analyst consensus (real - Yahoo targetPrice/numAnalysts)
+      const targetP = parseFloat(live.targetPrice) || null;
+      const price = parseFloat(live.price);
+      const analyst_bull = targetP !== null && targetP > price * 1.1; // target 10%+ above
+      signals.push({ name: 'Analysts', bull: analyst_bull, real: targetP !== null,
+        detail: targetP !== null ? 'Target $' + targetP.toFixed(2) + ' (' + (((targetP/price)-1)*100).toFixed(0) + '% upside)' : 'N/A',
+        icon: '🎯' });
+
+      // 7. Macro / Market mood (real - Fear & Greed)
+      const fg = fgData?.score || 50;
+      // Neutral/mild fear = good for buying. Extreme greed = bad. Extreme fear = risky.
+      const macro_bull = fg >= 25 && fg <= 65;
+      signals.push({ name: 'Market Mood', bull: macro_bull, real: !!fgData,
+        detail: fgData ? fgData.rating + ' (' + fg + ')' : 'N/A',
+        icon: '🌡️' });
+
+      const bullCount = signals.filter(s => s.bull).length;
+      const realSignals = signals.filter(s => s.real).length;
+      const convergenceScore = realSignals > 0 ? (bullCount / 7) * 100 : 0;
+
+      return {
+        ticker: wsb.ticker,
+        company: wsb.name || wsb.ticker,
+        price: live.price,
+        changePct: live.changePct,
+        signals,
+        bullCount,
+        convergenceScore,
+        beta,
+        mentions,
+        marketCap: live.marketCap,
+        nextEarnings: live.nextEarnings,
+      };
+    });
+
+    // Sort by bull signal count, then by convergence score
+    scored.sort((a, b) => b.bullCount - a.bullCount || b.convergenceScore - a.convergenceScore);
+    const winner = scored[0];
+
+    if (!winner || winner.bullCount < 3) {
+      throw new Error('No strong convergence found today. Market signals are mixed — consider waiting.');
+    }
+
+    // STEP 4: Get AI confirmation with real data
+    setStep(4, 'Getting AI verdict on ' + winner.ticker + '…');
+    const signalSummary = winner.signals.map(s => s.name + ':' + (s.bull ? '✅' : '❌') + ' ' + s.detail).join(', ');
+    const prompt = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) +
+      '. Stock: ' + winner.ticker + ' ($' + winner.price + '). Convergence signals: ' + signalSummary +
+      '. Bull signals: ' + winner.bullCount + '/7.' +
+      (winner.nextEarnings && winner.nextEarnings !== '—' ? ' Earnings: ' + winner.nextEarnings + '.' : '') +
+      ' Give a brief verdict (2-3 sentences) on why this is or isn\'t a good buy today.' +
+      (langMode === 'he' ? ' Answer in Hebrew.' : '') +
+      ' JSON only: {"verdict":"2-3 sentences","entry":"$X","stop":"$X","target_1m":"$X","risk":"1 sentence","is_golden":true/false}';
+
+    const raw = await toJSON(prompt, false);
+    const ai = extractJSON(raw);
+
+    // Render the winner
+    renderTopPick(winner, ai, scored.slice(1, 4), fgData);
+
+  } catch(e) {
+    const errMsg = e.message || 'Unknown error';
+    const isRate = errMsg.includes('rate limit') || errMsg.includes('30,000') || errMsg.includes('input tokens');
+    if (isRate) { window._rateLimitUntil = Date.now() + 60000; updateRateLimitBadge(); }
+    progress.innerHTML = '<div style="padding:16px;color:var(--' + (isRate ? 'yellow' : 'red') + ');font-size:12px;background:var(--s1);border-radius:10px;">⚠️ ' + errMsg + '</div>';
+  } finally {
+    if (btn) { btn.textContent = '🏆 TOP PICK TODAY — All Signals Green'; btn.disabled = false; }
+  }
+}
+
+function renderTopPick(winner, ai, runners, fgData) {
+  const el = document.getElementById('topPickResult');
+  if (!el) return;
+
+  const isGolden = ai?.is_golden || winner.bullCount >= 6;
+  const bullPct = Math.round((winner.bullCount / 7) * 100);
+  const barColor = bullPct >= 85 ? 'var(--green)' : bullPct >= 70 ? 'var(--blue)' : 'var(--yellow)';
+
+  const signalsHTML = winner.signals.map(s =>
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--b1);">' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+        '<span style="font-size:14px;">' + s.icon + '</span>' +
+        '<div>' +
+          '<div style="font-family:var(--mono);font-size:11px;color:var(--t1);">' + s.name + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);">' + (s.real ? '● live' : '~ est') + ' · ' + s.detail + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<span style="font-size:16px;">' + (s.bull ? '✅' : '❌') + '</span>' +
+    '</div>'
+  ).join('');
+
+  const runnersHTML = runners.length > 0 ?
+    '<div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--b1);">' +
+      '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;margin-bottom:6px;">Runner-ups</div>' +
+      runners.map(r => '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;font-family:var(--mono);font-size:11px;">' +
+        '<span style="color:var(--t2);">' + r.ticker + '</span>' +
+        '<span style="color:var(--t3);">' + r.bullCount + '/7 signals</span>' +
+        '<button data-tp-ticker="' + r.ticker + '" class="tp-runner-btn" style="background:transparent;border:1px solid var(--b2);color:var(--t3);padding:2px 8px;border-radius:5px;font-family:var(--mono);font-size:9px;cursor:pointer;">Analyze</button>' +
+      '</div>').join('') +
+    '</div>' : '';
+
+  el.innerHTML = '<div style="padding:0 14px 14px;">' +
+    '<div style="background:linear-gradient(135deg,var(--s1),var(--s2));border:2px solid ' + barColor + '40;border-radius:14px;padding:16px;">' +
+
+      // Golden banner
+      (isGolden ? '<div style="background:linear-gradient(90deg,var(--yellow),var(--orange));color:var(--bg);font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 10px;border-radius:6px;margin-bottom:12px;text-align:center;">✨ GOLDEN SETUP — ' + winner.bullCount + '/7 SIGNALS ALIGNED</div>' : '') +
+
+      // Header
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;">' +
+        '<div>' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;">🏆 Today\'s Top Pick</div>' +
+          '<div style="font-family:var(--mono);font-size:28px;font-weight:700;color:var(--green);">' + winner.ticker + '</div>' +
+          '<div style="font-size:11px;color:var(--t2);">' + winner.company + '</div>' +
+          '<div style="font-family:var(--mono);font-size:12px;color:var(--t1);margin-top:2px;">$' + winner.price + ' <span style="color:' + (parseFloat(winner.changePct||0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + (parseFloat(winner.changePct||0) >= 0 ? '+' : '') + parseFloat(winner.changePct||0).toFixed(2) + '%</span></div>' +
+        '</div>' +
+        '<div style="text-align:right;">' +
+          '<button class="tp-close-btn" style="background:none;border:none;color:var(--t3);font-size:18px;cursor:pointer;display:block;margin-left:auto;">✕</button>' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);">Convergence</div>' +
+          '<div style="font-family:var(--mono);font-size:26px;font-weight:700;color:' + barColor + ';line-height:1;">' + winner.bullCount + '<span style="font-size:13px;color:var(--t3);">/7</span></div>' +
+        '</div>' +
+      '</div>' +
+
+      // Convergence bar
+      '<div style="margin-bottom:12px;">' +
+        '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--t3);margin-bottom:4px;">' +
+          '<span>Signal Convergence</span><span>' + bullPct + '%</span>' +
+        '</div>' +
+        '<div style="height:8px;background:var(--b2);border-radius:4px;overflow:hidden;">' +
+          '<div style="height:100%;width:' + bullPct + '%;background:linear-gradient(90deg,' + barColor + ',var(--blue));border-radius:4px;transition:width .8s;"></div>' +
+        '</div>' +
+      '</div>' +
+
+      // AI Verdict
+      (ai?.verdict ? '<div style="font-size:12px;color:var(--t1);line-height:1.6;margin-bottom:10px;padding:10px;background:rgba(255,255,255,.03);border-radius:8px;border-left:3px solid ' + barColor + ';">' + ai.verdict + '</div>' : '') +
+
+      // Entry/Stop/Target
+      (ai?.entry || ai?.stop || ai?.target_1m ? '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px;">' +
+        (ai.entry ? '<div style="padding:7px;background:var(--bg);border-radius:7px;text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">Entry</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--blue);">' + ai.entry + '</div></div>' : '') +
+        (ai.stop ? '<div style="padding:7px;background:var(--bg);border-radius:7px;text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">Stop</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--red);">' + ai.stop + '</div></div>' : '') +
+        (ai.target_1m ? '<div style="padding:7px;background:var(--bg);border-radius:7px;text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">1M Target</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--green);">' + ai.target_1m + '</div></div>' : '') +
+      '</div>' : '') +
+
+      // Risk
+      (ai?.risk ? '<div style="font-size:10px;color:var(--red);padding:6px 8px;background:rgba(255,68,102,.05);border-radius:6px;border-left:2px solid var(--red);margin-bottom:10px;">⚠️ ' + ai.risk + '</div>' : '') +
+
+      // All 7 signals
+      '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Signal Breakdown</div>' +
+      signalsHTML +
+
+      // Runner-ups + Full analysis button
+      runnersHTML +
+
+      '<button class="tp-full-btn" data-tp-ticker="' + winner.ticker + '" style="width:100%;margin-top:12px;background:' + barColor + ';color:var(--bg);border:none;padding:10px;border-radius:8px;font-family:var(--mono);font-size:12px;font-weight:700;cursor:pointer;">Full Analysis: ' + winner.ticker + ' →</button>' +
+
+    '</div>' +
+  '</div>';
+}
+
 // === Quick Buy Decision ===
 async function quickDecision() {
   const input = document.getElementById('quickTicker');
@@ -823,6 +1099,22 @@ function showQuickError(msg) {
   const quickContainer = document.getElementById('quickTicker').closest('div').parentElement;
   quickContainer.parentElement.insertBefore(result, quickContainer.nextSibling);
 }
+
+// Top Pick delegated handlers (avoids inline quote issues)
+document.addEventListener('click', function(e) {
+  if (e.target.classList.contains('tp-runner-btn')) {
+    const t = e.target.getAttribute('data-tp-ticker');
+    if (t) { const input = document.getElementById('tickerInput'); if (input) input.value = t; runAnalysis(t); }
+  }
+  if (e.target.classList.contains('tp-close-btn')) {
+    const el = document.getElementById('topPickResult');
+    if (el) el.remove();
+  }
+  if (e.target.classList.contains('tp-full-btn')) {
+    const t = e.target.getAttribute('data-tp-ticker');
+    if (t) { const input = document.getElementById('tickerInput'); if (input) input.value = t; runAnalysis(t); }
+  }
+});
 
 // Enter key for quick decision
 setTimeout(() => {
