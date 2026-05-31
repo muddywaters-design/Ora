@@ -629,6 +629,11 @@ setTimeout(() => {
   }
 }, 100);
 
+// Global utility: withTimeout
+function withTimeout(promise, ms=6000) {
+  return Promise.race([promise, new Promise(r => setTimeout(() => r(null), ms))]);
+}
+
 // === Quick Buy Decision ===
 async function quickDecision() {
   const input = document.getElementById('quickTicker');
@@ -2060,9 +2065,6 @@ async function runAnalysis(sym) {
 
   try {
     // Fetch all data sources in parallel with hard 6s cap
-    const withTimeout = (promise, ms=6000) =>
-      Promise.race([promise, new Promise(r => setTimeout(() => r(null), ms))]);
-
     const [liveData, insiderData, trendsData, shortData, optionsData, macroData] = await Promise.all([
       withTimeout(fetchLivePrice(t),      6000),
       withTimeout(fetchInsiderTrading(t), 4000),
