@@ -641,10 +641,24 @@ async function quickDecision() {
   const ticker = (input?.value || '').trim().toUpperCase();
   if (!ticker) { input?.focus(); return; }
 
-  // Check rate limit cooldown
+  // Check rate limit cooldown — show inline instead of alert
   if (window._rateLimitUntil && Date.now() < window._rateLimitUntil) {
     const sec = Math.ceil((window._rateLimitUntil - Date.now()) / 1000);
-    alert('Rate limit cooldown. Wait ' + sec + 's.');
+    const oldRes = document.getElementById('quickResult');
+    if (oldRes) oldRes.remove();
+    const res = document.createElement('div');
+    res.id = 'quickResult';
+    res.style.cssText = 'margin-top:10px;background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.3);border-radius:8px;padding:10px 14px;font-size:11px;color:var(--yellow);font-family:var(--mono);';
+    res.innerHTML = '⏱ Rate limit — wait <b id="qlCountdown">' + sec + 's</b> then try again. (Tip: turn off 🌐 web search to avoid this)';
+    const quickContainer = document.getElementById('quickTicker')?.closest('div')?.parentElement;
+    if (quickContainer) quickContainer.parentElement.insertBefore(res, quickContainer.nextSibling);
+    // Live countdown
+    const iv = setInterval(() => {
+      const rem = Math.ceil((window._rateLimitUntil - Date.now()) / 1000);
+      const el = document.getElementById('qlCountdown');
+      if (rem <= 0) { clearInterval(iv); if (res.parentNode) res.remove(); }
+      else if (el) el.textContent = rem + 's';
+    }, 1000);
     return;
   }
 
@@ -684,9 +698,8 @@ async function quickDecision() {
       (fgData?.score ? ', Market F&G=' + fgData.score + '(' + fgData.rating + ')' : '');
 
     const langInstr = langMode === 'he' ? ' Write reasoning and key_risk in HEBREW. Keep numbers/tickers in English.' : '';
-    const prompt = d + '. SHORT DECISION for ' + ticker + ' based ONLY on this real data: ' + dataContext + '. ' +
-      'Output JSON only: {"decision":"BUY|WAIT|SKIP","score":1-10,"is_golden_entry":true|false,"reasoning":"2-3 short sentences why","entry_price":"$X","stop_loss":"$X","target_1m":"$X","key_risk":"one short sentence"}. ' +
-      'BUY=strong signals align, multiple positive factors. WAIT=mixed signals, wait for better entry. SKIP=negative signals dominate. Golden entry=rare alignment of 4+ positive factors.' + langInstr;
+    const prompt = d + '. Is ' + ticker + ' worth buying today? Data: ' + dataContext + '.' + langInstr +
+      ' JSON only: {"decision":"BUY|WAIT|SKIP","score":1-10,"is_golden_entry":true|false,"reasoning":"2 sentences","entry_price":"$X","stop_loss":"$X","target_1m":"$X","key_risk":"1 sentence"}';
 
     const raw = await toJSON(prompt, false); // No web search for speed
     const decision = extractJSON(raw);
@@ -694,12 +707,15 @@ async function quickDecision() {
     renderQuickDecision(ticker, liveData, decision);
   } catch(e) {
     const errMsg = e.message || 'Unknown error';
-    const isRate = errMsg.includes('rate limit') || errMsg.includes('30,000');
+    const isRate = errMsg.includes('rate limit') || errMsg.includes('30,000') || 
+                   errMsg.includes('input tokens') || errMsg.includes('529');
     if (isRate) {
       window._rateLimitUntil = Date.now() + 60000;
       updateRateLimitBadge();
+      showQuickError('⏱ Rate limit hit — wait 60 seconds. Tip: turn off 🌐 web search before retrying.');
+    } else {
+      showQuickError(errMsg);
     }
-    showQuickError(errMsg);
   } finally {
     btn.textContent = '⚡ Decide';
     btn.disabled = false;
