@@ -791,8 +791,33 @@ async function showTopPick() {
     scored.sort((a, b) => b.bullCount - a.bullCount || b.convergenceScore - a.convergenceScore);
     const winner = scored[0];
 
-    if (!winner || winner.bullCount < 3) {
-      throw new Error('No strong convergence found today. Market signals are mixed — consider waiting.');
+    if (!winner) {
+      throw new Error('No candidates found — check your connection and try again.');
+    }
+    // Dynamic threshold: need >50% of AVAILABLE signals to be bullish
+    const realCount = winner.signals.filter(s => s.real).length;
+    const required = realCount >= 4 ? Math.floor(realCount * 0.6) :
+                       realCount >= 2 ? Math.max(1, Math.floor(realCount * 0.5)) : 1;
+    if (winner.bullCount < required) {
+      // Still show the best pick with a warning instead of throwing
+      const bestMsg = 'Mixed signals today. Best available: ' + winner.ticker + 
+        ' (' + winner.bullCount + '/' + realCount + ' real signals bullish). Consider waiting for stronger setup.';
+      // render anyway with a warning overlay
+      const prompt = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) +
+        '. Stock: ' + winner.ticker + ' ($' + winner.price + '). Signals: ' +
+        winner.signals.map(s => s.name + ':' + (s.bull ? 'YES' : 'NO') + '(' + s.detail + ')').join(', ') +
+        '. Give a cautious verdict. Is it worth watching even if not a strong buy?' +
+        (langMode === 'he' ? ' Answer in Hebrew.' : '') +
+        ' JSON only: {"verdict":"2 sentences","entry":"$X","stop":"$X","target_1m":"$X","risk":"1 sentence","is_golden":false}';
+      try {
+        const raw = await toJSON(prompt, false);
+        const ai = extractJSON(raw);
+        ai._mixed_warning = bestMsg;
+        renderTopPick(winner, ai, scored.slice(1, 4), fgData);
+      } catch(_) {
+        throw new Error(bestMsg);
+      }
+      return;
     }
 
     // STEP 4: Get AI confirmation with real data
@@ -857,7 +882,8 @@ function renderTopPick(winner, ai, runners, fgData) {
     '<div style="background:linear-gradient(135deg,var(--s1),var(--s2));border:2px solid ' + barColor + '40;border-radius:14px;padding:16px;">' +
 
       // Golden banner
-      (isGolden ? '<div style="background:linear-gradient(90deg,var(--yellow),var(--orange));color:var(--bg);font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 10px;border-radius:6px;margin-bottom:12px;text-align:center;">✨ GOLDEN SETUP — ' + winner.bullCount + '/7 SIGNALS ALIGNED</div>' : '') +
+      (isGolden ? '<div style="background:linear-gradient(90deg,var(--yellow),var(--orange));color:var(--bg);font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 10px;border-radius:6px;margin-bottom:12px;text-align:center;">✨ GOLDEN SETUP — ' + winner.bullCount + '/7 SIGNALS ALIGNED</div>' :
+       ai._mixed_warning ? '<div style="background:rgba(255,208,96,.1);border:1px solid rgba(255,208,96,.3);color:var(--yellow);font-family:var(--mono);font-size:10px;padding:6px 10px;border-radius:6px;margin-bottom:12px;">⚠️ Mixed signals — best available pick, not a strong setup</div>' : '') +
 
       // Header
       '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;">' +
