@@ -704,7 +704,8 @@ async function quickDecision() {
     const raw = await toJSON(prompt, false); // No web search for speed
     const decision = extractJSON(raw);
 
-    renderQuickDecision(ticker, liveData, decision);
+    window._lastQuickData = { ticker, liveData, decision };
+  renderQuickDecision(ticker, liveData, decision);
   } catch(e) {
     const errMsg = e.message || 'Unknown error';
     const isRate = errMsg.includes('rate limit') || errMsg.includes('30,000') || 
@@ -770,20 +771,23 @@ function renderQuickDecision(ticker, liveData, decision) {
 
   const result = document.createElement('div');
   result.id = 'quickResult';
-  result.style.cssText = 'margin-top:12px;background:' + c.bg + ';border:2px solid ' + c.border + ';border-radius:12px;padding:14px;animation:fadeIn .3s ease;';
+  result.style.cssText = 'margin-top:10px;background:' + c.bg + ';border:2px solid ' + c.border + ';border-radius:12px;padding:12px;animation:fadeIn .3s ease;';
   result.innerHTML = `
-    ${isGolden ? `<div style="background:linear-gradient(90deg,var(--yellow),var(--orange));color:var(--bg);font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 10px;border-radius:6px;margin-bottom:10px;text-align:center;letter-spacing:.05em;">${labels.golden}</div>` : ''}
+    ${isGolden ? `<div style="background:linear-gradient(90deg,var(--yellow),var(--orange));color:var(--bg);font-family:var(--mono);font-size:10px;font-weight:700;padding:3px 10px;border-radius:6px;margin-bottom:8px;text-align:center;letter-spacing:.05em;">${labels.golden}</div>` : ''}
 
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">
+      <div style="flex:1;">
         <div style="font-family:var(--mono);font-size:10px;color:var(--t3);">${ticker} · $${liveData.price}</div>
-        <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${c.main};margin-top:2px;">
+        <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:${c.main};margin-top:2px;">
           ${decType === 'BUY' ? '🟢' : decType === 'SKIP' ? '🔴' : '🟡'} ${labels[decType] || decType}
         </div>
       </div>
-      <div style="text-align:right;">
-        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);">${labels.score}</div>
-        <div style="font-family:var(--mono);font-size:26px;font-weight:700;color:${c.main};line-height:1;">${score}<span style="font-size:14px;color:var(--t3);">/10</span></div>
+      <div style="display:flex;align-items:flex-start;gap:10px;">
+        <div style="text-align:right;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3);">${labels.score}</div>
+          <div style="font-family:var(--mono);font-size:24px;font-weight:700;color:${c.main};line-height:1;">${score}<span style="font-size:12px;color:var(--t3);">/10</span></div>
+        </div>
+        <button onclick="document.getElementById('quickResult').remove()" style="background:transparent;border:none;color:var(--t3);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;flex-shrink:0;">✕</button>
       </div>
     </div>
 
@@ -886,6 +890,17 @@ function toggleLang() {
   langMode = langMode === 'en' ? 'he' : 'en';
   localStorage.setItem('so_lang', langMode);
   document.body.classList.toggle('lang-he', langMode === 'he');
+  // Note: Fixed UI labels update instantly. Claude text (reasoning etc.) 
+  // updates on the next RUN — Hebrew is sent to Claude in the prompt.
+  
+  // Show a brief toast explaining Hebrew mode
+  if (langMode === 'he') {
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--s1);border:1px solid var(--green);color:var(--t1);padding:8px 16px;border-radius:8px;font-size:11px;font-family:var(--mono);z-index:9999;animation:fadeIn .3s;white-space:nowrap;';
+    toast.textContent = '🇮🇱 עברית פעילה — הרץ ניתוח חדש לתוצאות בעברית';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3500);
+  }
   const btn = document.getElementById('langBtn');
   if (btn) {
     btn.textContent = langMode === 'he' ? '🇮🇱 HE' : '🇺🇸 EN';
@@ -895,6 +910,19 @@ function toggleLang() {
   // Re-render current analysis if showing
   if (window.currentParsed && window.currentTicker) {
     renderAnalysis(window.currentTicker, window.currentParsed);
+  }
+  // Re-render Quick Decision if showing
+  if (window._lastQuickData) {
+    renderQuickDecision(window._lastQuickData.ticker, window._lastQuickData.liveData, window._lastQuickData.decision);
+  }
+  // Show hint if Hebrew but no analysis loaded yet
+  if (langMode === 'he' && !window.currentParsed) {
+    const btn = document.getElementById('langBtn');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.style.background = 'rgba(57,217,138,.2)';
+      setTimeout(() => { btn.style.background = 'transparent'; }, 1500);
+    }
   }
 }
 setTimeout(() => {
