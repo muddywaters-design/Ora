@@ -249,6 +249,28 @@ body.light .logo-box { background: var(--green); }
 body.light input.ti { box-shadow: none; }
 body.light .live-pill { background: rgba(0,122,82,.08); border-color: rgba(0,122,82,.2); }
 body.light .live-label { color: var(--green); }
+
+/* Hebrew text auto-direction */
+.txt-card .cb,
+.fc-cell .fc-dir,
+.fc-dir > div,
+[id="quickResult"] {
+  unicode-bidi: plaintext;
+}
+
+/* Add some space for Hebrew rendering */
+body.lang-he .ch,
+body.lang-he .fc-tf {
+  direction: rtl;
+  text-align: right;
+}
+
+/* Smooth fade in for quick decision */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 </style>
 </head>
 <body>
@@ -283,6 +305,10 @@ body.light .live-label { color: var(--green); }
     <button id="ensembleBtn" onclick="toggleEnsemble()" title="Ensemble mode — 2 parallel models for higher accuracy (uses 2x tokens)"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
       🎭 1x
+    </button>
+    <button id="langBtn" onclick="toggleLang()" title="Toggle Hebrew/English"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
+      🇺🇸 EN
     </button>
     <div class="live-pill">
       <div class="live-dot"></div>
@@ -330,7 +356,25 @@ body.light .live-label { color: var(--green); }
       <input class="ti" id="tickerInput" placeholder="Enter ticker symbol: NVDA, AAPL…" maxlength="10">
       <button class="btn btn-g" id="runBtn" onclick="runAnalysis()">RUN ▶</button>
     </div>
-  <div style="display:grid;grid-template-columns:1fr;gap:8px;">
+
+    <!-- Quick Buy Decision -->
+    <div style="margin-top:12px;background:linear-gradient(135deg,rgba(57,217,138,.06),rgba(77,168,255,.04));border:1px solid rgba(57,217,138,.2);border-radius:10px;padding:12px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+        <span style="font-size:13px;">💰</span>
+        <span style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--green);letter-spacing:.05em;">QUICK DECISION</span>
+        <span style="font-size:10px;color:var(--t3);">— Worth Buying Today?</span>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <input class="ti" id="quickTicker" placeholder="Ticker (e.g. NVDA)" maxlength="10"
+          style="flex:1;background:var(--bg);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:7px;font-family:var(--mono);font-size:13px;outline:none;">
+        <button onclick="quickDecision()" id="quickBtn"
+          style="background:var(--green);color:var(--bg);border:none;padding:9px 14px;border-radius:7px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          ⚡ Decide
+        </button>
+      </div>
+    </div>
+
+  <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:12px;">
 
     <button class="btn" id="wsbBtn2" onclick="showWSB()"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px;font-family:var(--mono);font-size:10px;cursor:pointer;border-radius:8px;transition:all .15s;letter-spacing:.03em;"
@@ -580,6 +624,263 @@ setTimeout(() => {
   const btn = document.getElementById('ensembleBtn');
   if (btn && ensembleMode) {
     btn.textContent = '🎭 2x';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'var(--green)';
+  }
+}, 100);
+
+// === Quick Buy Decision ===
+async function quickDecision() {
+  const input = document.getElementById('quickTicker');
+  const btn = document.getElementById('quickBtn');
+  const ticker = (input?.value || '').trim().toUpperCase();
+  if (!ticker) { input?.focus(); return; }
+
+  // Check rate limit cooldown
+  if (window._rateLimitUntil && Date.now() < window._rateLimitUntil) {
+    const sec = Math.ceil((window._rateLimitUntil - Date.now()) / 1000);
+    alert('Rate limit cooldown. Wait ' + sec + 's.');
+    return;
+  }
+
+  btn.textContent = '⏳ Analyzing…';
+  btn.disabled = true;
+
+  // Remove old result if exists
+  const oldResult = document.getElementById('quickResult');
+  if (oldResult) oldResult.remove();
+
+  try {
+    // Always clear cache for this ticker — Quick Decision must be real-time
+    if (typeof priceCache !== 'undefined') delete priceCache[ticker];
+
+    // Fetch REAL data fresh (no cache)
+    const [liveData, fgData] = await Promise.all([
+      withTimeout(fetchLivePrice(ticker), 8000),
+      withTimeout(fetchFearGreedFromAPI(), 5000),
+    ]);
+
+    if (!liveData?.price) {
+      throw new Error('Could not fetch data for ' + ticker);
+    }
+
+    // Build SHORT prompt focused only on decision
+    const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const dataContext =
+      'Price=$' + liveData.price +
+      (liveData.changePct ? ', Today=' + liveData.changePct + '%' : '') +
+      (liveData.rsi && liveData.rsi !== '—' ? ', RSI=' + liveData.rsi : '') +
+      (liveData.volumeRatio && liveData.volumeRatio !== '—' ? ', Vol=' + liveData.volumeRatio + 'x avg' : '') +
+      (liveData.weekPos52 ? ', 52W pos=' + liveData.weekPos52 + '%' : '') +
+      (liveData.macd && liveData.macd !== '—' ? ', MACD=' + liveData.macd + '/' + liveData.macdSignal : '') +
+      (liveData.beta ? ', Beta=' + liveData.beta : '') +
+      (liveData.sectorRelative ? ', vs Sector=' + liveData.sectorRelative + '%' : '') +
+      (liveData.nextEarnings && liveData.nextEarnings !== '—' ? ', NextEarnings=' + liveData.nextEarnings : '') +
+      (fgData?.score ? ', Market F&G=' + fgData.score + '(' + fgData.rating + ')' : '');
+
+    const langInstr = langMode === 'he' ? ' Write reasoning and key_risk in HEBREW. Keep numbers/tickers in English.' : '';
+    const prompt = d + '. SHORT DECISION for ' + ticker + ' based ONLY on this real data: ' + dataContext + '. ' +
+      'Output JSON only: {"decision":"BUY|WAIT|SKIP","score":1-10,"is_golden_entry":true|false,"reasoning":"2-3 short sentences why","entry_price":"$X","stop_loss":"$X","target_1m":"$X","key_risk":"one short sentence"}. ' +
+      'BUY=strong signals align, multiple positive factors. WAIT=mixed signals, wait for better entry. SKIP=negative signals dominate. Golden entry=rare alignment of 4+ positive factors.' + langInstr;
+
+    const raw = await toJSON(prompt, false); // No web search for speed
+    const decision = extractJSON(raw);
+
+    renderQuickDecision(ticker, liveData, decision);
+  } catch(e) {
+    const errMsg = e.message || 'Unknown error';
+    const isRate = errMsg.includes('rate limit') || errMsg.includes('30,000');
+    if (isRate) {
+      window._rateLimitUntil = Date.now() + 60000;
+      updateRateLimitBadge();
+    }
+    showQuickError(errMsg);
+  } finally {
+    btn.textContent = '⚡ Decide';
+    btn.disabled = false;
+  }
+}
+
+async function fetchFearGreedFromAPI() {
+  // Reuse the F&G fetcher from sentiment consensus
+  try {
+    const proxies = ['', 'https://corsproxy.io/?'];
+    const fgUrl = 'https://api.alternative.me/fng/?limit=1';
+    for (const proxy of proxies) {
+      try {
+        const fullUrl = proxy ? proxy + encodeURIComponent(fgUrl) : fgUrl;
+        const r = await fetch(fullUrl, { signal: AbortSignal.timeout(4000) });
+        if (!r.ok) continue;
+        const data = await r.json();
+        const item = data?.data?.[0];
+        if (item) return { score: parseInt(item.value), rating: item.value_classification };
+      } catch(_) {}
+    }
+  } catch(_) {}
+  return null;
+}
+
+function renderQuickDecision(ticker, liveData, decision) {
+  const oldResult = document.getElementById('quickResult');
+  if (oldResult) oldResult.remove();
+
+  const decType = decision.decision || 'WAIT';
+  const score = decision.score || 5;
+  const isGolden = decision.is_golden_entry === true;
+
+  const colors = {
+    BUY:  { main: 'var(--green)',  bg: 'rgba(57,217,138,.1)',  border: 'rgba(57,217,138,.35)' },
+    WAIT: { main: 'var(--yellow)', bg: 'rgba(255,208,96,.1)',  border: 'rgba(255,208,96,.35)' },
+    SKIP: { main: 'var(--red)',    bg: 'rgba(255,68,102,.1)',  border: 'rgba(255,68,102,.35)' },
+  };
+  const c = colors[decType] || colors.WAIT;
+
+  const labels = langMode === 'he' ? {
+    BUY: 'קנה עכשיו', WAIT: 'המתן', SKIP: 'דלג',
+    score: 'ציון', reason: 'נימוק', entry: 'כניסה', stop: 'סטופ', target: 'יעד 1 חודש',
+    risk: 'סיכון מרכזי', golden: '✨ נקודת כניסת זהב',
+    full: 'ניתוח מלא →',
+  } : {
+    BUY: 'BUY NOW', WAIT: 'WAIT', SKIP: 'SKIP',
+    score: 'Score', reason: 'Why', entry: 'Entry', stop: 'Stop', target: '1M Target',
+    risk: 'Key Risk', golden: '✨ Golden Entry Setup',
+    full: 'Full Analysis →',
+  };
+
+  const result = document.createElement('div');
+  result.id = 'quickResult';
+  result.style.cssText = 'margin-top:12px;background:' + c.bg + ';border:2px solid ' + c.border + ';border-radius:12px;padding:14px;animation:fadeIn .3s ease;';
+  result.innerHTML = `
+    ${isGolden ? `<div style="background:linear-gradient(90deg,var(--yellow),var(--orange));color:var(--bg);font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 10px;border-radius:6px;margin-bottom:10px;text-align:center;letter-spacing:.05em;">${labels.golden}</div>` : ''}
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--t3);">${ticker} · $${liveData.price}</div>
+        <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${c.main};margin-top:2px;">
+          ${decType === 'BUY' ? '🟢' : decType === 'SKIP' ? '🔴' : '🟡'} ${labels[decType] || decType}
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);">${labels.score}</div>
+        <div style="font-family:var(--mono);font-size:26px;font-weight:700;color:${c.main};line-height:1;">${score}<span style="font-size:14px;color:var(--t3);">/10</span></div>
+      </div>
+    </div>
+
+    <div style="font-size:12px;color:var(--t1);line-height:1.55;margin-bottom:10px;">${decision.reasoning || ''}</div>
+
+    ${decision.entry_price || decision.stop_loss || decision.target_1m ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;">
+      ${decision.entry_price ? `<div style="padding:6px 8px;background:var(--bg);border-radius:6px;text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">${labels.entry}</div><div style="font-family:var(--mono);font-size:12px;color:var(--blue);font-weight:700;">${decision.entry_price}</div></div>` : ''}
+      ${decision.stop_loss ? `<div style="padding:6px 8px;background:var(--bg);border-radius:6px;text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">${labels.stop}</div><div style="font-family:var(--mono);font-size:12px;color:var(--red);font-weight:700;">${decision.stop_loss}</div></div>` : ''}
+      ${decision.target_1m ? `<div style="padding:6px 8px;background:var(--bg);border-radius:6px;text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">${labels.target}</div><div style="font-family:var(--mono);font-size:12px;color:var(--green);font-weight:700;">${decision.target_1m}</div></div>` : ''}
+    </div>` : ''}
+
+    ${decision.key_risk ? `<div style="font-size:10px;color:var(--red);padding:6px 8px;background:rgba(255,68,102,.05);border-radius:6px;border-left:2px solid var(--red);margin-bottom:8px;">⚠️ ${labels.risk}: ${decision.key_risk}</div>` : ''}
+
+    <button onclick="document.getElementById('tickerInput').value='${ticker}';runAnalysis('${ticker}');document.getElementById('quickResult')?.remove();" style="width:100%;background:transparent;border:1px solid ${c.border};color:${c.main};padding:8px;border-radius:7px;font-family:var(--mono);font-size:11px;cursor:pointer;font-weight:700;">
+      ${labels.full}
+    </button>
+  `;
+
+  // Insert after the quick decision container
+  const quickContainer = document.getElementById('quickTicker').closest('div').parentElement;
+  quickContainer.parentElement.insertBefore(result, quickContainer.nextSibling);
+}
+
+function showQuickError(msg) {
+  const oldResult = document.getElementById('quickResult');
+  if (oldResult) oldResult.remove();
+
+  const result = document.createElement('div');
+  result.id = 'quickResult';
+  result.style.cssText = 'margin-top:12px;background:rgba(255,68,102,.08);border:1px solid rgba(255,68,102,.3);border-radius:10px;padding:12px;font-size:12px;color:var(--red);';
+  result.innerHTML = '⚠️ ' + msg;
+
+  const quickContainer = document.getElementById('quickTicker').closest('div').parentElement;
+  quickContainer.parentElement.insertBefore(result, quickContainer.nextSibling);
+}
+
+// Enter key for quick decision
+setTimeout(() => {
+  const input = document.getElementById('quickTicker');
+  if (input) {
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') quickDecision();
+    });
+  }
+}, 200);
+
+// === Hebrew Translation System ===
+let langMode = localStorage.getItem('so_lang') || 'en';
+
+const TRANSLATIONS = {
+  // UI Labels
+  'PRIMARY DRIVER': 'מניע ראשי',
+  'MULTI-TIMEFRAME FORECAST': 'תחזית רב-טווחית',
+  '1 WEEK': 'שבוע',
+  '1 MONTH': 'חודש',
+  '6 MONTHS': '6 חודשים',
+  '1 YEAR': 'שנה',
+  'Signals': 'אותות',
+  'Key Catalysts': 'זרזים מרכזיים',
+  'Risks': 'סיכונים',
+  'Stop Loss / Invalidation level:': 'סטופ לוס / רמת ביטול:',
+  'Confidence': 'ביטחון',
+  'Probability Distribution': 'התפלגות הסתברות',
+  'Suggested Size': 'גודל מומלץ',
+  'High Conviction Setup': 'הכרעה גבוהה',
+  'Sector aligned + multi-timeframe agreement + favorable risk/reward': 'מיושר עם הסקטור · הסכמה רב-טווחית · יחס סיכוי/סיכון מועיל',
+  'Strong Bullish': 'שורי חזק',
+  'Strong Bearish': 'דובי חזק',
+  'Range-bound': 'תנודה צרה',
+  'Interest & Attention Signals': 'אותות עניין וקשב',
+  'Trading Volume': 'נפח מסחר',
+  'Search Interest': 'עניין חיפוש',
+  'Short Interest': 'שורט',
+  'Options Flow': 'תזרים אופציות',
+  'Institutional Hold': 'החזקה מוסדית',
+  'Insider Activity': 'פעילות פנימית',
+  'Real market data showing where attention is flowing. Volume, short interest, options & insider data are live; search interest is an AI estimate.': 'נתוני שוק אמיתיים המראים לאן הקשב זורם. נפח, שורט, אופציות ופנים – live; עניין חיפוש הוא הערכת AI.',
+  'BULLISH': 'שורי',
+  'BEARISH': 'דובי',
+  'NEUTRAL': 'נייטרלי',
+  'STRONG': 'חזק',
+  'MODERATE': 'בינוני',
+  'WEAK': 'חלש',
+  'UP': 'עלייה',
+  'DOWN': 'ירידה',
+  'SIDEWAYS': 'דשדוש',
+  'AVOID': 'הימנע',
+  'Strong': 'חזק',
+  'Standard': 'רגיל',
+  'Small': 'קטן',
+  'Minimal': 'מינימלי',
+};
+
+function tr(text) {
+  if (langMode !== 'he' || !text) return text;
+  return TRANSLATIONS[text] || text;
+}
+
+function toggleLang() {
+  langMode = langMode === 'en' ? 'he' : 'en';
+  localStorage.setItem('so_lang', langMode);
+  document.body.classList.toggle('lang-he', langMode === 'he');
+  const btn = document.getElementById('langBtn');
+  if (btn) {
+    btn.textContent = langMode === 'he' ? '🇮🇱 HE' : '🇺🇸 EN';
+    btn.style.color = langMode === 'he' ? 'var(--green)' : 'var(--t2)';
+    btn.style.borderColor = langMode === 'he' ? 'var(--green)' : 'var(--b2)';
+  }
+  // Re-render current analysis if showing
+  if (window.currentParsed && window.currentTicker) {
+    renderAnalysis(window.currentTicker, window.currentParsed);
+  }
+}
+setTimeout(() => {
+  if (langMode === 'he') document.body.classList.add('lang-he');
+  const btn = document.getElementById('langBtn');
+  if (btn && langMode === 'he') {
+    btn.textContent = '🇮🇱 HE';
     btn.style.color = 'var(--green)';
     btn.style.borderColor = 'var(--green)';
   }
@@ -909,7 +1210,8 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     return '';
   })();
   const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
-  return `${d}. ${multiTfNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx}
+  const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level) IN HEBREW. Numbers and tickers stay in English.' : '';
+  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
 }
@@ -2001,10 +2303,10 @@ function renderAnalysis(ticker, d) {
   const tracked = watchlist.some(w => w.ticker === ticker);
 
   const allForecastCells = [
-    {key:'week',      label:'1 WEEK',   acc:'var(--green)'},
-    {key:'month',     label:'1 MONTH',  acc:'var(--blue)'},
-    {key:'half_year', label:'6 MONTHS', acc:'var(--yellow)'},
-    {key:'year',      label:'1 YEAR',   acc:'var(--orange)'},
+    {key:'week',      label:tr('1 WEEK'),   acc:'var(--green)'},
+    {key:'month',     label:tr('1 MONTH'),  acc:'var(--blue)'},
+    {key:'half_year', label:tr('6 MONTHS'), acc:'var(--yellow)'},
+    {key:'year',      label:tr('1 YEAR'),   acc:'var(--orange)'},
   ];
   const visibleForecasts = highConvictionMode
     ? allForecastCells.filter(c => (fs[c.key]?.confidence || 0) >= 55)
@@ -2015,12 +2317,12 @@ function renderAnalysis(ticker, d) {
     return `<div class="fc-cell" style="--acc:${acc}">
       <div class="fc-tf">${label}</div>
       <div class="fc-dir" style="color:${f.signal==='BULLISH'?'var(--green)':f.signal==='BEARISH'?'var(--red)':'var(--yellow)'}">
-        ${f.direction==='UP'?'↑ UP':f.direction==='DOWN'?'↓ DOWN':f.direction||f.signal||'—'}
+        ${f.direction==='UP'?'↑ '+tr('UP'):f.direction==='DOWN'?'↓ '+tr('DOWN'):tr(f.direction)||tr(f.signal)||'—'}
       </div>
       ${(f.range_low||f.range_high) ? `<div style="font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:2px;">${f.range_low||''} → ${f.range_high||''}</div>` : (f.range ? `<div style="font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:2px;">${f.range}</div>` : '')}
       ${(f.prob_up!==undefined) ? `
         <div style="margin-top:8px;padding:6px 8px;background:var(--s2);border-radius:6px;">
-          <div style="font-family:var(--mono);font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">Probability Distribution</div>
+          <div style="font-family:var(--mono);font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">${tr('Probability Distribution')}</div>
           <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--b2);">
             <div style="width:${f.prob_up}%;background:var(--green);" title="Up: ${f.prob_up}%"></div>
             <div style="width:${f.prob_flat||0}%;background:var(--yellow);" title="Flat: ${f.prob_flat}%"></div>
@@ -2035,7 +2337,7 @@ function renderAnalysis(ticker, d) {
       ${f.magnitude ? `<div style="display:inline-block;padding:2px 7px;border-radius:20px;font-family:var(--mono);font-size:9px;margin-top:3px;background:${f.magnitude==='STRONG'?'rgba(0,229,160,.12)':f.magnitude==='WEAK'?'rgba(255,68,102,.1)':'rgba(255,208,96,.1)'};color:${f.magnitude==='STRONG'?'var(--green)':f.magnitude==='WEAK'?'var(--red)':'var(--yellow)'};">${f.magnitude}</div>` : ''}
       <div class="fc-rng">${f.range||'—'}</div>
       <div class="cbar"><div class="cfill" style="width:${f.confidence||0}%"></div></div>
-      <div class="fc-cf"><span class="${fc}">${f.signal||'NEUTRAL'}</span><span style="color:var(--t3)">${f.confidence||0}% conf</span></div>
+      <div class="fc-cf"><span class="${fc}">${tr(f.signal||'NEUTRAL')}</span><span style="color:var(--t3)">${f.confidence||0}% ${tr('Confidence').toLowerCase()}</span></div>
       ${(()=>{
         const adjustments = [];
         if (f._sanity_capped) adjustments.push('<span title="Range capped for realism">⚠ capped</span>');
@@ -2053,8 +2355,8 @@ function renderAnalysis(ticker, d) {
         return adjustments.length > 0 ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;font-size:9px;color:var(--t3);font-family:var(--mono);">' + adjustments.join(' · ') + '</div>' : '';
       })()}
       ${f.position_size_pct && f.position_size_pct !== '0' ? `<div style="margin-top:8px;padding:6px 8px;background:${f.position_recommendation==='Strong'?'rgba(57,217,138,.1)':f.position_recommendation==='AVOID'?'rgba(255,68,102,.1)':'rgba(77,168,255,.08)'};border-radius:6px;border:1px solid ${f.position_recommendation==='Strong'?'rgba(57,217,138,.3)':f.position_recommendation==='AVOID'?'rgba(255,68,102,.3)':'rgba(77,168,255,.2)'};display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);">
-        <span style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Suggested Size</span>
-        <span style="font-size:12px;font-weight:700;color:${f.position_recommendation==='Strong'?'var(--green)':f.position_recommendation==='AVOID'?'var(--red)':'var(--blue)'};">${f.position_size_pct}% · ${f.position_recommendation}</span>
+        <span style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">${tr('Suggested Size')}</span>
+        <span style="font-size:12px;font-weight:700;color:${f.position_recommendation==='Strong'?'var(--green)':f.position_recommendation==='AVOID'?'var(--red)':'var(--blue)'};">${f.position_size_pct}% · ${tr(f.position_recommendation)}</span>
       </div>` : (f.position_recommendation === 'AVOID' ? `<div style="margin-top:8px;padding:6px 8px;background:rgba(255,68,102,.1);border-radius:6px;border:1px solid rgba(255,68,102,.3);font-family:var(--mono);font-size:11px;color:var(--red);text-align:center;font-weight:700;">⛔ AVOID — Negative expectancy</div>` : '')}
       ${f.ensemble_agreement ? `<div style="font-family:var(--mono);font-size:8px;color:var(--blue);margin-top:4px;">🔀 ${f.ensemble_agreement}</div>` : ''}
       ${f.bull_case ? `<div style="margin-top:6px;padding:6px 8px;background:rgba(0,229,160,.06);border-radius:6px;border-left:2px solid var(--green);">
@@ -2189,9 +2491,9 @@ function renderAnalysis(ticker, d) {
       return `<div style="margin:12px 0;padding:14px 16px;background:linear-gradient(135deg,${color}15,${color}05);border:1px solid ${color}60;border-radius:12px;display:flex;align-items:center;gap:12px;">
         <div style="font-size:24px;">🎯</div>
         <div style="flex:1;">
-          <div style="font-family:var(--mono);font-size:9px;color:${color};text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:4px;">High Conviction Setup · ${banner.label}</div>
-          <div style="font-size:13px;color:var(--t1);font-weight:600;">${dir==='UP'?'↑ Strong Bullish':dir==='DOWN'?'↓ Strong Bearish':'→ Range-bound'} · ${banner.f.confidence}% confidence · Suggested ${banner.f.position_size_pct}% position</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:3px;">Sector aligned + multi-timeframe agreement + favorable risk/reward</div>
+          <div style="font-family:var(--mono);font-size:9px;color:${color};text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:4px;">${tr('High Conviction Setup')} · ${banner.label}</div>
+          <div style="font-size:13px;color:var(--t1);font-weight:600;">${dir==='UP'?'↑ '+tr('Strong Bullish'):dir==='DOWN'?'↓ '+tr('Strong Bearish'):'→ '+tr('Range-bound')} · ${banner.f.confidence}% confidence · Suggested ${banner.f.position_size_pct}% position</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:3px;">${tr('Sector aligned + multi-timeframe agreement + favorable risk/reward')}</div>
         </div>
       </div>`;
     })()}
@@ -2233,7 +2535,7 @@ function renderAnalysis(ticker, d) {
         const color = ratio >= 2 ? 'var(--red)' : ratio >= 1.5 ? 'var(--yellow)' : ratio >= 0.8 ? 'var(--t1)' : 'var(--t3)';
         const bar = Math.min(100, ratio * 33);
         rows.push({
-          label: 'Trading Volume',
+          label: tr('Trading Volume'),
           value: d.live_volume_signal,
           detail: d.live_volume_ratio + 'x average',
           color, bar,
@@ -2246,7 +2548,7 @@ function renderAnalysis(ticker, d) {
         const tc = (d.live_trends_change||'').toLowerCase();
         const color = tc.includes('surg')||tc.includes('spike')||tc.includes('rising') ? 'var(--green)' : tc.includes('declin')||tc.includes('fall') ? 'var(--red)' : 'var(--t1)';
         rows.push({
-          label: 'Search Interest',
+          label: tr('Search Interest'),
           value: d.live_trends_signal,
           detail: d.live_trends_change || d.live_trends_current || '',
           color, bar: 60,
@@ -2259,7 +2561,7 @@ function renderAnalysis(ticker, d) {
         const sp = parseFloat(d.live_short_pct) || 0;
         const color = sp >= 20 ? 'var(--red)' : sp >= 10 ? 'var(--yellow)' : 'var(--t1)';
         rows.push({
-          label: 'Short Interest',
+          label: tr('Short Interest'),
           value: d.live_short_pct + '% of float',
           detail: d.live_squeeze ? 'Squeeze score: ' + d.live_squeeze : '',
           color, bar: Math.min(100, sp * 3),
@@ -2272,7 +2574,7 @@ function renderAnalysis(ticker, d) {
         const flow = (d.live_options_flow||'').toLowerCase();
         const color = flow.includes('bull') ? 'var(--green)' : flow.includes('bear') ? 'var(--red)' : 'var(--t1)';
         rows.push({
-          label: 'Options Flow',
+          label: tr('Options Flow'),
           value: d.live_options_flow,
           detail: d.live_options_pc ? 'P/C ratio: ' + d.live_options_pc : '',
           color, bar: 55,
@@ -2284,7 +2586,7 @@ function renderAnalysis(ticker, d) {
       if (d.live_inst_pct && d.live_inst_pct !== '—') {
         const ip = parseFloat(d.live_inst_pct) || 0;
         rows.push({
-          label: 'Institutional Hold',
+          label: tr('Institutional Hold'),
           value: d.live_inst_pct + '%',
           detail: d.live_inst_trend && d.live_inst_trend !== '—' ? d.live_inst_trend : '',
           color: 'var(--t1)', bar: Math.min(100, ip),
@@ -2297,7 +2599,7 @@ function renderAnalysis(ticker, d) {
         const sig = (d.live_insider_signal||'').toLowerCase();
         const color = sig.includes('buy') ? 'var(--green)' : sig.includes('sell') ? 'var(--red)' : 'var(--t1)';
         rows.push({
-          label: 'Insider Activity',
+          label: tr('Insider Activity'),
           value: d.live_insider_signal,
           detail: (d.live_insider_buys||0) + ' buys / ' + (d.live_insider_sells||0) + ' sells',
           color, bar: 50,
@@ -2324,15 +2626,15 @@ function renderAnalysis(ticker, d) {
       ).join('');
       
       return '<div class="card">' +
-        '<div class="ch">📊 Interest & Attention Signals</div>' +
+        '<div class="ch">📊 ' + tr('Interest & Attention Signals') + '</div>' +
         '<div class="cb">' +
-          '<div style="font-size:10px;color:var(--t3);margin-bottom:8px;line-height:1.5;">Real market data showing where attention is flowing. Volume, short interest, options &amp; insider data are live; search interest is an AI estimate.</div>' +
+          '<div style="font-size:10px;color:var(--t3);margin-bottom:8px;line-height:1.5;">' + tr('Real market data showing where attention is flowing. Volume, short interest, options & insider data are live; search interest is an AI estimate.') + '</div>' +
           rowsHTML +
         '</div>' +
       '</div>';
     })()}
 
-    ${txtCard('Key Catalysts', d.key_catalysts, 'var(--green)')}
+    ${txtCard(tr('Key Catalysts'), d.key_catalysts, 'var(--green)')}
     ${txtCard('Key Risks', d.key_risks, 'var(--red)')}
     ${txtCard('Full Analysis', d.full_analysis, 'var(--blue)')}
   </div>`;
