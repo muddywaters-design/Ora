@@ -298,6 +298,10 @@ body.lang-he .fc-tf {
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;" id="finnhubBtn">
       📈 <span id="finnhubLabel">PRICES</span>
     </button>
+    <button onclick="showTwelveSetup()" title="Twelve Data — real RSI/MACD indicators" id="twelveBtn"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
+      📊 <span id="twelveLabel">RSI</span>
+    </button>
     <button id="convictionBtn" onclick="toggleConviction()" title="High conviction mode — only shows trades >55% confidence"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
       🎯 ALL
@@ -1612,6 +1616,129 @@ ${research.slice(0, 1500)}
 
 
 
+// ── Twelve Data API (technical indicators: RSI, MACD) ────────
+let twelveKey = localStorage.getItem('so_twelve') || '';
+
+function showTwelveSetup() {
+  const existing = document.getElementById('twelveModal');
+  if (existing) { existing.remove(); return; }
+  const modal = document.createElement('div');
+  modal.id = 'twelveModal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--b1);border-radius:14px;padding:20px;max-width:420px;width:100%;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--t1);">📊 Twelve Data — Technical Indicators</div>
+        <button onclick="document.getElementById('twelveModal').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:18px;">✕</button>
+      </div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.6;margin-bottom:14px;">
+        Provides REAL RSI &amp; MACD when Yahoo proxies fail. Server-calculated, no CORS issues.
+        <ul style="padding-left:18px;margin:8px 0;">
+          <li>800 requests/day free</li>
+          <li>Real RSI, MACD, indicators</li>
+          <li>No credit card required</li>
+        </ul>
+        <div style="margin-top:10px;">
+          1. Go to <a href="https://twelvedata.com/pricing" target="_blank" style="color:var(--blue);">twelvedata.com</a><br>
+          2. Sign up free (Basic plan)<br>
+          3. Copy API key from dashboard<br>
+          4. Paste below
+        </div>
+      </div>
+      <input type="password" id="twelveKeyInput" value="${twelveKey}" placeholder="your-api-key..." style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:10px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;box-sizing:border-box;">
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button onclick="saveTwelveKey()" style="flex:1;background:var(--green);color:var(--bg);border:none;padding:10px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">Save Key</button>
+        <button onclick="clearTwelveKey()" style="background:transparent;border:1px solid var(--b2);color:var(--t3);padding:10px 14px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;">Clear</button>
+      </div>
+      <div id="twelveStatus" style="margin-top:10px;font-size:10px;color:var(--t3);text-align:center;"></div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function saveTwelveKey() {
+  const input = document.getElementById('twelveKeyInput');
+  if (!input) return;
+  const key = input.value.trim();
+  if (!key) { document.getElementById('twelveStatus').textContent = 'Please enter a key'; return; }
+  twelveKey = key;
+  localStorage.setItem('so_twelve', key);
+  updateTwelveBadge();
+  document.getElementById('twelveStatus').innerHTML = '<span style="color:var(--green);">✓ Saved!</span>';
+  setTimeout(() => document.getElementById('twelveModal')?.remove(), 800);
+}
+
+function clearTwelveKey() {
+  twelveKey = '';
+  localStorage.removeItem('so_twelve');
+  const input = document.getElementById('twelveKeyInput');
+  if (input) input.value = '';
+  updateTwelveBadge();
+}
+
+function updateTwelveBadge() {
+  const label = document.getElementById('twelveLabel');
+  const btn = document.getElementById('twelveBtn');
+  if (!label || !btn) return;
+  if (twelveKey) {
+    label.textContent = 'ON';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'var(--green)';
+  } else {
+    label.textContent = 'RSI';
+    btn.style.color = 'var(--t2)';
+    btn.style.borderColor = 'var(--b2)';
+  }
+}
+setTimeout(updateTwelveBadge, 100);
+
+async function fetchTwelveIndicators(ticker) {
+  if (!twelveKey) return null;
+  try {
+    // Fetch RSI and MACD in parallel — direct API, no CORS proxy needed
+    const [rsiRes, macdRes, quoteRes] = await Promise.all([
+      fetch(`https://api.twelvedata.com/rsi?symbol=${ticker}&interval=1day&time_period=14&apikey=${twelveKey}`, {signal: AbortSignal.timeout(6000)}).then(r=>r.json()).catch(()=>null),
+      fetch(`https://api.twelvedata.com/macd?symbol=${ticker}&interval=1day&apikey=${twelveKey}`, {signal: AbortSignal.timeout(6000)}).then(r=>r.json()).catch(()=>null),
+      fetch(`https://api.twelvedata.com/quote?symbol=${ticker}&apikey=${twelveKey}`, {signal: AbortSignal.timeout(6000)}).then(r=>r.json()).catch(()=>null),
+    ]);
+
+    const result = {};
+    // RSI
+    if (rsiRes?.values?.[0]?.rsi) {
+      result.rsi = parseFloat(rsiRes.values[0].rsi).toFixed(1);
+    }
+    // MACD
+    if (macdRes?.values?.[0]) {
+      const m = macdRes.values[0];
+      if (m.macd) result.macd = parseFloat(m.macd).toFixed(3);
+      if (m.macd_signal) result.macdSignal = parseFloat(m.macd_signal).toFixed(3);
+    }
+    // Quote (volume, 52w)
+    if (quoteRes && !quoteRes.code) {
+      if (quoteRes.volume && quoteRes.average_volume) {
+        const vr = parseInt(quoteRes.volume) / parseInt(quoteRes.average_volume);
+        result.volumeRatio = vr.toFixed(2);
+        result.volumeSignal = vr >= 2 ? 'Extreme' : vr >= 1.5 ? 'High' : vr >= 1 ? 'Normal' : 'Low';
+        result.volume = parseInt(quoteRes.volume).toLocaleString();
+      }
+      if (quoteRes.fifty_two_week) {
+        const high = parseFloat(quoteRes.fifty_two_week.high);
+        const low = parseFloat(quoteRes.fifty_two_week.low);
+        const price = parseFloat(quoteRes.close);
+        if (high && low && price) {
+          result.weekPos52 = (((price - low) / (high - low)) * 100).toFixed(0);
+          result.high52 = high.toFixed(2);
+          result.low52 = low.toFixed(2);
+        }
+      }
+    }
+
+    return Object.keys(result).length > 0 ? result : null;
+  } catch(e) {
+    console.warn('Twelve Data failed:', e.message);
+    return null;
+  }
+}
+
 // ── Finnhub API Integration ──────────────────────────────────
 let finnhubKey = localStorage.getItem('so_finnhub') || '';
 
@@ -2210,6 +2337,24 @@ async function fetchYahooData(ticker) {
       return result;
     } catch(e) { console.warn('Proxy failed:', proxy, e.message); }
   }
+  // Last resort: if Twelve Data has indicators, return those even without full price data
+  if (twelveEnrich && (twelveEnrich.rsi || twelveEnrich.macd)) {
+    const tdResult = {
+      price: '—', change: '—', changePct: '—',
+      rsi: twelveEnrich.rsi || '—',
+      macd: twelveEnrich.macd || '—',
+      macdSignal: twelveEnrich.macdSignal || '—',
+      volumeRatio: twelveEnrich.volumeRatio || '—',
+      volumeSignal: twelveEnrich.volumeSignal || '—',
+      weekPos52: twelveEnrich.weekPos52 || '—',
+      high52: twelveEnrich.high52 || '—',
+      low52: twelveEnrich.low52 || '—',
+      source: 'Twelve Data (indicators only)',
+      _closes: [],
+    };
+    priceCache[cacheKey] = { data: tdResult, timestamp: Date.now() };
+    return tdResult;
+  }
   return null; // all failed — Claude will use its own knowledge
 }
 
@@ -2220,19 +2365,38 @@ async function fetchLivePrice(ticker) {
     return priceCache[cacheKey].data;
   }
 
+  // If Twelve Data is set but Finnhub is OFF, fetch Twelve indicators to enrich Yahoo
+  let twelveEnrich = null;
+  if (twelveKey && !finnhubKey) {
+    twelveEnrich = await fetchTwelveIndicators(ticker).catch(() => null);
+  }
+
   // Strategy: if Finnhub is set, fetch Finnhub price AND Yahoo technicals in parallel
   // Finnhub gives reliable price; Yahoo gives RSI/MACD/Volume (which Finnhub free tier lacks)
   if (typeof finnhubKey !== 'undefined' && finnhubKey) {
     try {
-      // Fetch both in parallel
-      const [finnhubData, yahooData] = await Promise.all([
+      // Fetch all sources in parallel
+      const [finnhubData, yahooData, twelveData] = await Promise.all([
         fetchFinnhubPrice(ticker).catch(() => null),
         fetchYahooData(ticker).catch(() => null),
+        fetchTwelveIndicators(ticker).catch(() => null),
       ]);
 
       if (finnhubData?.price) {
-        // Merge: Finnhub price + Yahoo technicals
+        // Merge: Finnhub price + Yahoo technicals + Twelve Data indicators
         const merged = { ...finnhubData };
+        // Twelve Data is most reliable for RSI/MACD (server-calculated)
+        if (twelveData) {
+          if (twelveData.rsi) merged.rsi = twelveData.rsi;
+          if (twelveData.macd) merged.macd = twelveData.macd;
+          if (twelveData.macdSignal) merged.macdSignal = twelveData.macdSignal;
+          if (twelveData.volumeRatio) merged.volumeRatio = twelveData.volumeRatio;
+          if (twelveData.volumeSignal) merged.volumeSignal = twelveData.volumeSignal;
+          if (twelveData.volume) merged.volume = twelveData.volume;
+          if (twelveData.weekPos52) merged.weekPos52 = twelveData.weekPos52;
+          if (twelveData.high52) merged.high52 = twelveData.high52;
+          if (twelveData.low52) merged.low52 = twelveData.low52;
+        }
         if (yahooData) {
           // Take technicals from Yahoo (Finnhub free tier doesn't have these)
           merged.rsi = yahooData.rsi || merged.rsi;
@@ -2256,7 +2420,7 @@ async function fetchLivePrice(ticker) {
           merged.nextEarnings = yahooData.nextEarnings || merged.nextEarnings;
           merged.pe = yahooData.pe || merged.pe;
           merged._closes = yahooData._closes || merged._closes;
-          merged.source = 'Finnhub + Yahoo (merged)';
+          merged.source = twelveData ? 'Finnhub + Twelve + Yahoo' : 'Finnhub + Yahoo (merged)';
         }
         priceCache[cacheKey] = { data: merged, timestamp: Date.now() };
         return merged;
@@ -2569,10 +2733,36 @@ async function fetchLivePrice(ticker) {
         dividendYield, dividendLabel,
         source: 'Yahoo Finance (live)',
       };
+      // Enrich with Twelve Data indicators if available (and Yahoo's are missing)
+      if (twelveEnrich) {
+        if (twelveEnrich.rsi && (!result.rsi || result.rsi === '—')) result.rsi = twelveEnrich.rsi;
+        if (twelveEnrich.macd && (!result.macd || result.macd === '—')) { result.macd = twelveEnrich.macd; result.macdSignal = twelveEnrich.macdSignal; }
+        if (twelveEnrich.volumeRatio && (!result.volumeRatio || result.volumeRatio === '—')) { result.volumeRatio = twelveEnrich.volumeRatio; result.volumeSignal = twelveEnrich.volumeSignal; }
+        if (twelveEnrich.weekPos52 && (!result.weekPos52 || result.weekPos52 === '—')) result.weekPos52 = twelveEnrich.weekPos52;
+        result.source = 'Yahoo + Twelve Data';
+      }
       // Cache successful result
       priceCache[cacheKey] = { data: result, timestamp: Date.now() };
       return result;
     } catch(e) { console.warn('Proxy failed:', proxy, e.message); }
+  }
+  // Last resort: if Twelve Data has indicators, return those even without full price data
+  if (twelveEnrich && (twelveEnrich.rsi || twelveEnrich.macd)) {
+    const tdResult = {
+      price: '—', change: '—', changePct: '—',
+      rsi: twelveEnrich.rsi || '—',
+      macd: twelveEnrich.macd || '—',
+      macdSignal: twelveEnrich.macdSignal || '—',
+      volumeRatio: twelveEnrich.volumeRatio || '—',
+      volumeSignal: twelveEnrich.volumeSignal || '—',
+      weekPos52: twelveEnrich.weekPos52 || '—',
+      high52: twelveEnrich.high52 || '—',
+      low52: twelveEnrich.low52 || '—',
+      source: 'Twelve Data (indicators only)',
+      _closes: [],
+    };
+    priceCache[cacheKey] = { data: tdResult, timestamp: Date.now() };
+    return tdResult;
   }
   return null; // all failed — Claude will use its own knowledge
 }
