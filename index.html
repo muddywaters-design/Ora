@@ -686,20 +686,37 @@ async function showTopPick() {
   };
 
   try {
+    // Pre-check: warn if no reliable data source is set
+    if (!finnhubKey && !twelveKey) {
+      setStep(1, '⚠️ Tip: Enable 📈 Finnhub or 📊 Twelve Data for best results…');
+      await new Promise(r => setTimeout(r, 1500));
+    }
+
     // STEP 1: Get WSB trending pool
     setStep(1, 'Fetching real WSB trending data…');
     const wsbPool = await fetchApeWisdom();
     if (!wsbPool || wsbPool.length === 0) throw new Error('WSB data unavailable — try again');
-    const candidates = wsbPool.slice(0, 25); // top 25 trending
+    const candidates = wsbPool.slice(0, 15); // top 15 trending (batched to avoid rate limits)
 
-    // STEP 2: Fetch real market data for all candidates in parallel
+    // STEP 2: Fetch real market data — batched to avoid rate limits
     setStep(2, 'Fetching live market data for ' + candidates.length + ' stocks…');
-    const [fgData, marketResults] = await Promise.all([
-      fetchFearGreedFromAPI(),
-      Promise.allSettled(candidates.map(t => 
-        fetchLivePrice(t.ticker).then(live => ({ wsb: t, live }))
-      ))
-    ]);
+    const fgData = await fetchFearGreedFromAPI();
+
+    // Batch fetches in groups of 5 to respect API rate limits
+    const marketResults = [];
+    const batchSize = 5;
+    for (let i = 0; i < candidates.length; i += batchSize) {
+      const batch = candidates.slice(i, i + batchSize);
+      setStep(2, 'Fetching data ' + Math.min(i + batchSize, candidates.length) + '/' + candidates.length + '…');
+      const batchResults = await Promise.allSettled(
+        batch.map(t => fetchLivePrice(t.ticker).then(live => ({ wsb: t, live })))
+      );
+      marketResults.push(...batchResults);
+      // Small delay between batches (except last)
+      if (i + batchSize < candidates.length) {
+        await new Promise(r => setTimeout(r, 400));
+      }
+    }
 
     const stocks = marketResults
       .filter(r => r.status === 'fulfilled' && r.value.live?.price)
@@ -985,8 +1002,8 @@ async function quickDecision() {
       withTimeout(fetchFearGreedFromAPI(), 5000),
     ]);
 
-    if (!liveData?.price) {
-      throw new Error('Could not fetch data for ' + ticker);
+    if (!liveData?.price || liveData.price === '—') {
+      throw new Error('Could not fetch price for ' + ticker + '. Yahoo proxies may be blocked. Enable 📈 Finnhub for reliable prices.');
     }
 
     // Build SHORT prompt focused only on decision
