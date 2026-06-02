@@ -1587,6 +1587,40 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
 
   // Sector rotation signal
+  // === Fundamental Financials Context (real reports) ===
+  const fundCtx = (() => {
+    if (!fhData) return '';
+    const parts = [];
+    const f = fhData.fhFinancials;
+    if (f) {
+      const fin = [];
+      if (f.revenueGrowthTTMYoy != null) fin.push('RevGrowth=' + f.revenueGrowthTTMYoy.toFixed(1) + '%YoY');
+      if (f.epsGrowthTTMYoy != null) fin.push('EPSGrowth=' + f.epsGrowthTTMYoy.toFixed(1) + '%YoY');
+      if (f.netProfitMarginTTM != null) fin.push('NetMargin=' + f.netProfitMarginTTM.toFixed(1) + '%');
+      if (f.grossMarginTTM != null) fin.push('GrossMargin=' + f.grossMarginTTM.toFixed(1) + '%');
+      if (f.roeTTM != null) fin.push('ROE=' + f.roeTTM.toFixed(1) + '%');
+      if (f.totalDebt2EquityAnnual != null) fin.push('D/E=' + f.totalDebt2EquityAnnual.toFixed(2));
+      if (f.currentRatioAnnual != null) fin.push('CurrentRatio=' + f.currentRatioAnnual.toFixed(2));
+      if (f.peTTM != null) fin.push('P/E=' + f.peTTM.toFixed(1));
+      if (f.psTTM != null) fin.push('P/S=' + f.psTTM.toFixed(1));
+      if (fin.length) parts.push('Fundamentals:' + fin.join(','));
+    }
+    const sec = fhData.secData;
+    if (sec && sec.revenue) {
+      const secParts = [];
+      const fmt = (n) => n >= 1e9 ? (n/1e9).toFixed(1) + 'B' : n >= 1e6 ? (n/1e6).toFixed(0) + 'M' : n;
+      secParts.push('Revenue=$' + fmt(sec.revenue));
+      if (sec.netIncome != null) secParts.push('NetIncome=$' + fmt(sec.netIncome));
+      if (sec.equity != null) secParts.push('Equity=$' + fmt(sec.equity));
+      if (sec.cash != null) secParts.push('Cash=$' + fmt(sec.cash));
+      if (sec.liabilities != null && sec.assets != null) {
+        secParts.push('Assets=$' + fmt(sec.assets) + ',Liab=$' + fmt(sec.liabilities));
+      }
+      if (secParts.length) parts.push('SEC-Filed(FY' + (sec.fiscalYear||'') + '):' + secParts.join(','));
+    }
+    return parts.length > 0 ? parts.join('. ') + '.' : '';
+  })();
+
   // === Finnhub Extended Data (real news, analysts, insider) ===
   const fhCtx = (() => {
     if (!fhData) return '';
@@ -1687,10 +1721,10 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     return '';
   })();
   const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
-  const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level) IN HEBREW. Numbers and tickers stay in English.' : '';
+  const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level, fundamental_outlook.summary, full_analysis) IN HEBREW. Numbers, tickers, and verdict codes stay in English.' : '';
   return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx}
 Reply with ONLY JSON (no markdown):
-{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3 sentences."}`;
+{"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","fundamental_outlook":{"summary":"2-3 sentences on financial health","health_score":"1-10","bull_target_pct":"+X%","bear_target_pct":"-X%","base_case_pct":"+/-X%","verdict":"STRONG|HEALTHY|MIXED|WEAK|RISKY"},"full_analysis":"3 sentences."}`;
 }
 
 function mkResearchPrompt(ticker) { return mkSinglePrompt(ticker, null); }
@@ -1700,7 +1734,7 @@ function mkJSONPrompt(ticker, research) {
 
 ${research.slice(0, 1500)}
 
-{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"UP","magnitude":"MODERATE","range_low":"+2%","range_high":"+12%","prob_up":60,"prob_flat":25,"prob_down":15,"confidence":68,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"month":{"direction":"UP","magnitude":"STRONG","range_low":"+5%","range_high":"+25%","prob_up":55,"prob_flat":25,"prob_down":20,"confidence":62,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"half_year":{"direction":"UP","magnitude":"MODERATE","range_low":"+8%","range_high":"+40%","prob_up":50,"prob_flat":25,"prob_down":25,"confidence":52,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"year":{"direction":"UP","magnitude":"STRONG","range_low":"+15%","range_high":"+60%","prob_up":45,"prob_flat":30,"prob_down":25,"confidence":44,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","full_analysis":"3-4 sentences."}`;
+{"company_name":"Name","current_price":"$X","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"signals":{"rsi":{"value":"58","label":"Neutral"},"macd":{"value":"Positive","label":"Bullish"},"analyst_consensus":{"value":"Buy","label":"28 analysts"},"price_target":{"value":"$X","label":"avg target"},"pe_ratio":{"value":"XX","label":"vs sector"},"short_interest":{"value":"X%","label":"float"}},"forecasts":{"week":{"direction":"UP","magnitude":"MODERATE","range_low":"+2%","range_high":"+12%","prob_up":60,"prob_flat":25,"prob_down":15,"confidence":68,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"month":{"direction":"UP","magnitude":"STRONG","range_low":"+5%","range_high":"+25%","prob_up":55,"prob_flat":25,"prob_down":20,"confidence":62,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"half_year":{"direction":"UP","magnitude":"MODERATE","range_low":"+8%","range_high":"+40%","prob_up":50,"prob_flat":25,"prob_down":25,"confidence":52,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"},"year":{"direction":"UP","magnitude":"STRONG","range_low":"+15%","range_high":"+60%","prob_up":45,"prob_flat":30,"prob_down":25,"confidence":44,"signal":"BULLISH","reasoning":"X","bull_case":"X","bear_case":"X","key_level":"$X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","fundamental_outlook":{"summary":"2-3 sentences on revenue growth, margins, debt and what it means","health_score":"1-10 financial health","bull_target_pct":"+X% if fundamentals play out well over 6-12mo","bear_target_pct":"-X% downside if fundamentals deteriorate","base_case_pct":"most likely +/-X% over 6-12mo based on fundamentals","verdict":"STRONG|HEALTHY|MIXED|WEAK|RISKY"},"full_analysis":"3-4 sentences."}`;
 }
 
 
@@ -1828,6 +1862,123 @@ async function fetchTwelveIndicators(ticker) {
     console.warn('Twelve Data failed:', e.message);
     return null;
   }
+}
+
+// ── Fundamental Financials (Finnhub + SEC EDGAR) ─────────────
+
+async function fetchFinnhubFinancials(ticker) {
+  if (!finnhubKey) return null;
+  try {
+    const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${finnhubKey}`;
+    const r = await fetch(url, {signal: AbortSignal.timeout(6000)});
+    if (!r.ok) return null;
+    const data = await r.json();
+    const m = data?.metric;
+    if (!m) return null;
+
+    return {
+      // Valuation
+      peTTM: m.peTTM,
+      pbAnnual: m.pbAnnual,
+      psTTM: m.psTTM,
+      // Profitability
+      roeTTM: m.roeTTM,
+      roaTTM: m.roaTTM,
+      grossMarginTTM: m.grossMarginTTM,
+      netProfitMarginTTM: m.netProfitMarginTTM,
+      operatingMarginTTM: m.operatingMarginTTM,
+      // Growth
+      revenueGrowthTTMYoy: m.revenueGrowthTTMYoy,
+      epsGrowthTTMYoy: m.epsGrowthTTMYoy,
+      revenueGrowth5Y: m.revenueGrowth5Y,
+      // Financial health
+      currentRatioAnnual: m.currentRatioAnnual,
+      totalDebt2EquityAnnual: m['totalDebt/totalEquityAnnual'] || m.totalDebtToEquityAnnual,
+      // Per share
+      epsTTM: m.epsTTM,
+      bookValuePerShareAnnual: m.bookValuePerShareAnnual,
+      // 52 week
+      week52High: m['52WeekHigh'],
+      week52Low: m['52WeekLow'],
+      // Dividend
+      dividendYieldTTM: m.dividendYieldIndicatedAnnual || m.currentDividendYieldTTM,
+      // Beta
+      beta: m.beta,
+    };
+  } catch(_) { return null; }
+}
+
+async function fetchSECFinancials(ticker) {
+  // SEC EDGAR — official filings via company facts API
+  // Note: requires CIK lookup; SEC supports CORS for company tickers
+  try {
+    // Step 1: Get CIK from ticker
+    const tickerUrl = 'https://www.sec.gov/files/company_tickers.json';
+    const proxies = ['https://corsproxy.io/?', 'https://api.allorigins.win/raw?url='];
+
+    let cik = null;
+    for (const proxy of proxies) {
+      try {
+        const r = await fetch(proxy + encodeURIComponent(tickerUrl), {signal: AbortSignal.timeout(6000)});
+        if (!r.ok) continue;
+        const data = await r.json();
+        // data is object of {0: {cik_str, ticker, title}, ...}
+        for (const key in data) {
+          if (data[key].ticker === ticker.toUpperCase()) {
+            cik = String(data[key].cik_str).padStart(10, '0');
+            break;
+          }
+        }
+        if (cik) break;
+      } catch(_) { continue; }
+    }
+
+    if (!cik) return null;
+
+    // Step 2: Get company facts (financial data)
+    const factsUrl = `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`;
+    for (const proxy of proxies) {
+      try {
+        const r = await fetch(proxy + encodeURIComponent(factsUrl), {signal: AbortSignal.timeout(8000)});
+        if (!r.ok) continue;
+        const data = await r.json();
+        const facts = data?.facts?.['us-gaap'];
+        if (!facts) continue;
+
+        // Extract key metrics — most recent annual values
+        const getLatest = (concept) => {
+          const units = facts[concept]?.units;
+          if (!units) return null;
+          const usdData = units.USD || units['USD/shares'] || Object.values(units)[0];
+          if (!usdData || usdData.length === 0) return null;
+          // Get most recent annual (form 10-K) value
+          const annual = usdData.filter(d => d.form === '10-K' && d.fp === 'FY').sort((a,b) => new Date(b.end) - new Date(a.end));
+          return annual[0] || usdData[usdData.length - 1];
+        };
+
+        const revenue = getLatest('Revenues') || getLatest('RevenueFromContractWithCustomerExcludingAssessedTax');
+        const netIncome = getLatest('NetIncomeLoss');
+        const assets = getLatest('Assets');
+        const liabilities = getLatest('Liabilities');
+        const equity = getLatest('StockholdersEquity');
+        const cash = getLatest('CashAndCashEquivalentsAtCarryingValue');
+
+        return {
+          cik,
+          companyName: data.entityName,
+          revenue: revenue?.val,
+          revenueDate: revenue?.end,
+          netIncome: netIncome?.val,
+          assets: assets?.val,
+          liabilities: liabilities?.val,
+          equity: equity?.val,
+          cash: cash?.val,
+          fiscalYear: revenue?.fy,
+        };
+      } catch(_) { continue; }
+    }
+    return null;
+  } catch(_) { return null; }
 }
 
 // ── Finnhub Extended Data (free tier endpoints) ──────────────
@@ -3150,7 +3301,7 @@ async function runAnalysis(sym) {
   try {
     // Fetch all data sources in parallel with hard 6s cap
     const [liveData, insiderData, trendsData, shortData, optionsData, macroData,
-           fhNews, fhAnalysts, fhInsider] = await Promise.all([
+           fhNews, fhAnalysts, fhInsider, fhFinancials, secData] = await Promise.all([
       withTimeout(fetchLivePrice(t),      6000),
       withTimeout(fetchInsiderTrading(t), 4000),
       withTimeout(fetchGoogleTrends(t),   4000),
@@ -3161,6 +3312,9 @@ async function runAnalysis(sym) {
       finnhubKey ? withTimeout(fetchFinnhubNews(t),     6000) : Promise.resolve(null),
       finnhubKey ? withTimeout(fetchFinnhubAnalysts(t), 5000) : Promise.resolve(null),
       finnhubKey ? withTimeout(fetchFinnhubInsider(t),  5000) : Promise.resolve(null),
+      // Fundamental financials (real reports)
+      finnhubKey ? withTimeout(fetchFinnhubFinancials(t), 6000) : Promise.resolve(null),
+      withTimeout(fetchSECFinancials(t), 9000),
     ]);
     // Steps 1+2 done after data fetch
     if(window._advanceStep) { window._advanceStep(); window._advanceStep(); }
@@ -3230,7 +3384,7 @@ async function runAnalysis(sym) {
     // Live data status — only show warning AFTER analysis, not during loading
     // (The post-analysis warning handles this if needed)
     if(window._advanceStep) window._advanceStep(); // Step: Running AI
-    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData, {fhNews, fhAnalysts, fhInsider}), useWebSearch);
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData, {fhNews, fhAnalysts, fhInsider, fhFinancials, secData}), useWebSearch);
     if(window._advanceStep) window._advanceStep(); // Step: Building report
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
@@ -3338,6 +3492,8 @@ async function runAnalysis(sym) {
     parsed._fhNews = fhNews;
     parsed._fhAnalysts = fhAnalysts;
     parsed._fhInsider = fhInsider;
+    parsed._fhFinancials = fhFinancials;
+    parsed._secData = secData;
     renderAnalysis(t, parsed);
     document.getElementById('liveLabel').textContent = 'LIVE';
   } catch (e) {
@@ -3789,6 +3945,95 @@ function renderAnalysis(ticker, d) {
 
     ${txtCard(tr('Key Catalysts'), d.key_catalysts, 'var(--green)')}
     ${txtCard('Key Risks', d.key_risks, 'var(--red)')}
+    ${(()=>{
+      // Fundamentals card (real Finnhub metrics)
+      const f = d._fhFinancials;
+      if (!f) return '';
+      const metrics = [];
+      const fmt = (v, suffix) => v != null ? v.toFixed(suffix === '%' ? 1 : 2) + (suffix||'') : null;
+      const addMetric = (label, val, good, bad) => {
+        if (val == null) return;
+        let color = 'var(--t1)';
+        if (good !== undefined && val >= good) color = 'var(--green)';
+        else if (bad !== undefined && val <= bad) color = 'var(--red)';
+        metrics.push({label, val: fmt(val, label.includes('%')||label.includes('Growth')||label.includes('Margin')||label.includes('ROE')?'%':''), color});
+      };
+      addMetric('Rev Growth', f.revenueGrowthTTMYoy, 10, 0);
+      addMetric('EPS Growth', f.epsGrowthTTMYoy, 10, 0);
+      addMetric('Net Margin', f.netProfitMarginTTM, 10, 0);
+      addMetric('Gross Margin', f.grossMarginTTM, 40, 20);
+      addMetric('ROE', f.roeTTM, 15, 0);
+      if (f.totalDebt2EquityAnnual != null) metrics.push({label:'Debt/Equity', val: f.totalDebt2EquityAnnual.toFixed(2), color: f.totalDebt2EquityAnnual < 1 ? 'var(--green)' : f.totalDebt2EquityAnnual > 2 ? 'var(--red)' : 'var(--yellow)'});
+      if (f.currentRatioAnnual != null) metrics.push({label:'Current Ratio', val: f.currentRatioAnnual.toFixed(2), color: f.currentRatioAnnual > 1.5 ? 'var(--green)' : f.currentRatioAnnual < 1 ? 'var(--red)' : 'var(--t1)'});
+      if (f.peTTM != null) metrics.push({label:'P/E', val: f.peTTM.toFixed(1), color:'var(--t1)'});
+      
+      if (metrics.length === 0) return '';
+      const grid = metrics.map(m => 
+        '<div style="padding:8px;background:var(--bg);border-radius:7px;text-align:center;">' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);">' + m.label + '</div>' +
+          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + m.color + ';margin-top:2px;">' + m.val + '</div>' +
+        '</div>'
+      ).join('');
+      return '<div class="card"><div class="ch">💼 ' + (langMode==='he'?'נתונים פיננסיים':'Fundamentals') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
+        '<div class="cb"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:6px;">' + grid + '</div>' +
+        (d._secData && d._secData.revenue ? '<div style="margin-top:10px;padding:8px;background:rgba(77,168,255,.06);border-radius:7px;font-size:10px;color:var(--t3);font-family:var(--mono);">📋 SEC Filed (FY' + (d._secData.fiscalYear||'') + '): Revenue $' + (d._secData.revenue/1e9).toFixed(1) + 'B' + (d._secData.netIncome ? ' · Net Income $' + (d._secData.netIncome/1e9).toFixed(2) + 'B' : '') + '</div>' : '') +
+        '</div></div>';
+    })()}
+
+    ${(()=>{
+      const fo = d.fundamental_outlook;
+      if (!fo) return '';
+      // Handle both old (string) and new (object) formats
+      if (typeof fo === 'string') {
+        return '<div class="card"><div class="ch">📊 ' + (langMode==='he'?'אופק פיננסי':'Fundamental Outlook') + '</div><div class="cb"><div style="font-size:12px;color:var(--t1);line-height:1.6;padding:10px;background:rgba(57,217,138,.05);border-left:3px solid var(--green);border-radius:6px;">' + fo + '</div></div></div>';
+      }
+      // Structured outlook with return/loss horizon
+      const verdict = fo.verdict || 'MIXED';
+      const vColors = {STRONG:'var(--green)', HEALTHY:'#5fb87a', MIXED:'var(--yellow)', WEAK:'var(--orange)', RISKY:'var(--red)'};
+      const vColor = vColors[verdict] || 'var(--yellow)';
+      const vLabelHe = {STRONG:'חזק מאוד', HEALTHY:'בריא', MIXED:'מעורב', WEAK:'חלש', RISKY:'מסוכן'};
+      const score = parseInt(fo.health_score) || 5;
+      
+      // Parse percentages
+      const parsePct = (s) => { if (!s) return null; const m = String(s).match(/-?\d+\.?\d*/); return m ? parseFloat(m[0]) : null; };
+      const bull = parsePct(fo.bull_target_pct);
+      const bear = parsePct(fo.bear_target_pct);
+      const base = parsePct(fo.base_case_pct);
+      
+      // Build horizon bar (bear ... base ... bull)
+      let horizonBar = '';
+      if (bull != null && bear != null) {
+        const range = bull - bear;
+        const basePos = base != null && range > 0 ? ((base - bear) / range) * 100 : 50;
+        horizonBar = '<div style="margin:14px 0;">' +
+          '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;margin-bottom:6px;">' +
+            '<span style="color:var(--red);">' + (langMode==='he'?'תרחיש שלילי':'Bear') + ' ' + fo.bear_target_pct + '</span>' +
+            '<span style="color:var(--green);">' + (langMode==='he'?'תרחיש חיובי':'Bull') + ' ' + fo.bull_target_pct + '</span>' +
+          '</div>' +
+          '<div style="position:relative;height:10px;background:linear-gradient(90deg,var(--red),var(--yellow),var(--green));border-radius:5px;">' +
+            (base != null ? '<div style="position:absolute;left:' + Math.max(2,Math.min(96,basePos)) + '%;top:-4px;width:3px;height:18px;background:var(--t1);border-radius:2px;box-shadow:0 0 4px rgba(0,0,0,.5);"></div>' : '') +
+          '</div>' +
+          (base != null ? '<div style="text-align:center;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--t1);">' + (langMode==='he'?'תרחיש בסיס: ':'Base case: ') + '<b style="color:' + (base>=0?'var(--green)':'var(--red)') + ';">' + fo.base_case_pct + '</b> ' + (langMode==='he'?'(6-12 חודש)':'(6-12mo)') + '</div>' : '') +
+        '</div>';
+      }
+      
+      return '<div class="card"><div class="ch">📊 ' + (langMode==='he'?'אופק פיננסי — תחזית תשואה':'Fundamental Outlook — Return Horizon') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">DATA-DRIVEN</span></div>' +
+        '<div class="cb">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
+            '<div>' +
+              '<span style="font-family:var(--mono);font-size:9px;color:var(--t3);">' + (langMode==='he'?'הערכת בריאות פיננסית':'Financial Health') + '</span>' +
+              '<div style="display:flex;align-items:center;gap:8px;margin-top:2px;">' +
+                '<span style="font-family:var(--mono);font-size:20px;font-weight:700;color:' + vColor + ';">' + score + '<span style="font-size:12px;color:var(--t3);">/10</span></span>' +
+                '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + vColor + ';">' + (langMode==='he'?(vLabelHe[verdict]||verdict):verdict) + '</span>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          horizonBar +
+          '<div style="font-size:12px;color:var(--t1);line-height:1.6;padding:10px;background:rgba(57,217,138,.05);border-left:3px solid ' + vColor + ';border-radius:6px;margin-top:10px;">' + (fo.summary||'') + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);margin-top:8px;text-align:center;font-style:italic;">' + (langMode==='he'?'מבוסס על דוחות כספיים אמיתיים · לא ייעוץ השקעות':'Based on real financial filings · not investment advice') + '</div>' +
+        '</div></div>';
+    })()}
+
     ${txtCard('Full Analysis', d.full_analysis, 'var(--blue)')}
   </div>`;
 
