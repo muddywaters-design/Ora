@@ -282,7 +282,7 @@ body.lang-he .fc-tf {
   </button>
   <div class="logo">
     <div class="logo-box">SO</div>
-    <div class="logo-name">Stock<span>Oracle</span> Pro</div>
+    <div class="logo-name"><span>Oracle</span></div>
   </div>
   <div style="display:flex;align-items:center;gap:6px;overflow-x:auto;min-width:0;flex-shrink:1;-webkit-overflow-scrolling:touch;">
     <button id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark mode"
@@ -313,6 +313,10 @@ body.lang-he .fc-tf {
     <button id="langBtn" onclick="toggleLang()" title="Toggle Hebrew/English"
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);height:30px;padding:0 7px;border-radius:7px;cursor:pointer;font-size:9px;font-family:var(--mono);display:flex;align-items:center;gap:3px;transition:all .15s;flex-shrink:0;white-space:nowrap;">
       🇺🇸 EN
+    </button>
+    <button id="helpBtn" onclick="showHelpLegend()" title="Button guide"
+      style="background:transparent;border:1px solid var(--b2);color:var(--t2);width:30px;height:30px;border-radius:7px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;">
+      ❓
     </button>
     <div class="live-pill">
       <div class="live-dot"></div>
@@ -417,7 +421,60 @@ body.lang-he .fc-tf {
       <div class="empty-desc">
         Enter a ticker and press RUN<br>
         Real-time data from 12+ financial sources<br>
-        Weekly · Monthly · Yearly · Weekly · Monthly · 6-Month · Yearly forecasts
+        Weekly · Monthly · 6-Month · Yearly forecasts
+      </div>
+    </div>
+
+    <!-- Button Legend -->
+    <div id="buttonLegend" style="max-width:680px;margin:24px auto 16px;padding:0 14px;">
+      <div style="font-family:var(--mono);font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;text-align:center;margin-bottom:14px;">
+        <span id="legendTitle">— Button Guide —</span>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px;">
+
+        <!-- Topbar toggles -->
+        <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:12px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--blue);font-weight:700;margin-bottom:8px;letter-spacing:.05em;" id="legendTopbar">⚙️ TOP BAR TOGGLES</div>
+          <div style="display:flex;flex-direction:column;gap:7px;font-size:11px;color:var(--t2);line-height:1.4;">
+            <div><span style="font-size:13px;">☀️</span> <b id="lg-theme">Theme</b> — <span id="lg-theme-d">Switch between light and dark mode</span></div>
+            <div><span style="font-size:13px;">🌐</span> <b id="lg-web">Web Search</b> — <span id="lg-web-d">Let the model search live news (more accurate, uses more tokens)</span></div>
+            <div><span style="font-size:13px;">📈</span> <b id="lg-finn">Finnhub</b> — <span id="lg-finn-d">Reliable prices + real news, analysts, insider & financials</span></div>
+            <div><span style="font-size:13px;">📊</span> <b id="lg-twelve">Twelve Data</b> — <span id="lg-twelve-d">Real RSI & MACD indicators (works when Yahoo is blocked)</span></div>
+            <div><span style="font-size:13px;">🎯</span> <b id="lg-conv">Conviction</b> — <span id="lg-conv-d">ALL shows everything; HIGH only shows trades above 55% confidence</span></div>
+            <div><span style="font-size:13px;">🎭</span> <b id="lg-ens">Ensemble</b> — <span id="lg-ens-d">2x runs two models in parallel for higher accuracy (uses 2x tokens)</span></div>
+            <div><span style="font-size:13px;">🇺🇸</span> <b id="lg-lang">Language</b> — <span id="lg-lang-d">Toggle between English and Hebrew analysis</span></div>
+          </div>
+        </div>
+
+        <!-- Main actions -->
+        <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:12px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--green);font-weight:700;margin-bottom:8px;letter-spacing:.05em;" id="legendActions">🔍 ANALYSIS TOOLS</div>
+          <div style="display:flex;flex-direction:column;gap:7px;font-size:11px;color:var(--t2);line-height:1.4;">
+            <div><span style="font-size:13px;">▶️</span> <b id="lg-run">RUN</b> — <span id="lg-run-d">Full deep analysis of one stock: forecasts, signals, fundamentals & outlook</span></div>
+            <div><span style="font-size:13px;">💰</span> <b id="lg-quick">Quick Decision</b> — <span id="lg-quick-d">Fast Buy/Wait/Skip verdict for one stock with entry, stop & target</span></div>
+            <div><span style="font-size:13px;">🏆</span> <b id="lg-top">Top Pick Today</b> — <span id="lg-top-d">Scans trending stocks for the one with the most bullish signals aligned</span></div>
+            <div><span style="font-size:13px;">🚀</span> <b id="lg-wsb">WSB Hot</b> — <span id="lg-wsb-d">Most-discussed stocks on Reddit WallStreetBets in the last 48h</span></div>
+            <div><span style="font-size:13px;">⚡</span> <b id="lg-opp">Opportunity Scanner</b> — <span id="lg-opp-d">Finds stocks showing early signs of a potential move</span></div>
+            <div><span style="font-size:13px;">🎯</span> <b id="lg-sent">Sentiment Consensus</b> — <span id="lg-sent-d">Combines WSB buzz, volume & market mood into one score</span></div>
+            <div><span style="font-size:13px;">🎰</span> <b id="lg-penny">Penny Stock Scanner</b> — <span id="lg-penny-d">High-risk speculative picks under $0.004 (gamble territory)</span></div>
+          </div>
+        </div>
+
+        <!-- Menu pages -->
+        <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:12px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--orange);font-weight:700;margin-bottom:8px;letter-spacing:.05em;" id="legendMenu">☰ MENU PAGES</div>
+          <div style="display:flex;flex-direction:column;gap:7px;font-size:11px;color:var(--t2);line-height:1.4;">
+            <div><span style="font-size:13px;">📊</span> <b id="lg-analyze">Analyze</b> — <span id="lg-analyze-d">The main stock analysis page (this screen)</span></div>
+            <div><span style="font-size:13px;">⭐</span> <b id="lg-watch">Watchlist</b> — <span id="lg-watch-d">Tracked stocks + accuracy dashboard showing how often forecasts were right</span></div>
+            <div><span style="font-size:13px;">💼</span> <b id="lg-port">Portfolio</b> — <span id="lg-port-d">Virtual portfolio to track positions and backtest "what if I bought..."</span></div>
+          </div>
+        </div>
+
+        <div style="font-size:9px;color:var(--t3);text-align:center;font-style:italic;padding:4px;line-height:1.5;" id="legendDisclaimer">
+          All data marked LIVE is real-time. Forecasts are probabilistic estimates, not guarantees — not investment advice.
+        </div>
+
       </div>
     </div>
   </div>
@@ -1277,10 +1334,117 @@ function tr(text) {
   return TRANSLATIONS[text] || text;
 }
 
+function showHelpLegend() {
+  const existing = document.getElementById('helpModal');
+  if (existing) { existing.remove(); return; }
+  const he = langMode === 'he';
+
+  const t = he ? {
+    title:'מדריך לחצנים', topbar:'⚙️ לחצני סרגל עליון', actions:'🔍 כלי ניתוח', menu:'☰ עמודי תפריט',
+    theme:['ערכת נושא','מעבר בין מצב בהיר לכהה'],
+    web:['חיפוש ברשת','מאפשר למודל לחפש חדשות בזמן אמת (מדויק יותר)'],
+    finn:['Finnhub','מחירים אמינים + חדשות, אנליסטים, מנהלים ודוחות'],
+    twelve:['Twelve Data','אינדיקטורים אמיתיים RSI ו-MACD'],
+    conv:['רמת ביטחון','ALL מציג הכל; HIGH רק עסקאות מעל 55% ביטחון'],
+    ens:['אנסמבל','2x מריץ שני מודלים במקביל לדיוק גבוה יותר'],
+    lang:['שפה','מעבר בין אנגלית לעברית'],
+    run:['הרץ','ניתוח עומק מלא: תחזיות, אותות, נתונים פיננסיים ואופק'],
+    quick:['החלטה מהירה','פסיקה קנה/המתן/דלג עם כניסה, סטופ ויעד'],
+    top:['בחירת היום','מוצא את המניה עם הכי הרבה אותות חיוביים'],
+    wsb:['WSB חם','המניות הכי מדוברות ב-Reddit ב-48 שעות'],
+    opp:['סורק הזדמנויות','מוצא מניות עם סימנים מוקדמים לתנועה'],
+    sent:['קונצנזוס סנטימנט','משלב באזז, נפח ומצב רוח שוק'],
+    penny:['סורק מניות אגורה','בחירות ספקולטיביות מתחת ל-$0.004'],
+    analyze:['ניתוח','עמוד ניתוח המניות הראשי'],
+    watch:['רשימת מעקב','מניות במעקב + לוח דיוק תחזיות'],
+    port:['תיק','תיק וירטואלי ובדיקת "מה אם הייתי קונה"'],
+    disc:'כל נתון המסומן LIVE הוא בזמן אמת. תחזיות הן הערכות, לא הבטחות — לא ייעוץ השקעות.',
+    close:'סגור'
+  } : {
+    title:'Button Guide', topbar:'⚙️ TOP BAR TOGGLES', actions:'🔍 ANALYSIS TOOLS', menu:'☰ MENU PAGES',
+    theme:['Theme','Switch between light and dark mode'],
+    web:['Web Search','Let the model search live news (more accurate, uses more tokens)'],
+    finn:['Finnhub','Reliable prices + real news, analysts, insider & financials'],
+    twelve:['Twelve Data','Real RSI & MACD indicators (works when Yahoo is blocked)'],
+    conv:['Conviction','ALL shows everything; HIGH only shows trades above 55% confidence'],
+    ens:['Ensemble','2x runs two models in parallel for higher accuracy (uses 2x tokens)'],
+    lang:['Language','Toggle between English and Hebrew analysis'],
+    run:['RUN','Full deep analysis: forecasts, signals, fundamentals & outlook'],
+    quick:['Quick Decision','Fast Buy/Wait/Skip verdict with entry, stop & target'],
+    top:['Top Pick Today','Scans trending stocks for the most bullish signals aligned'],
+    wsb:['WSB Hot','Most-discussed stocks on Reddit WallStreetBets in 48h'],
+    opp:['Opportunity Scanner','Finds stocks showing early signs of a move'],
+    sent:['Sentiment Consensus','Combines WSB buzz, volume & market mood'],
+    penny:['Penny Stock Scanner','High-risk speculative picks under $0.004'],
+    analyze:['Analyze','The main stock analysis page'],
+    watch:['Watchlist','Tracked stocks + forecast accuracy dashboard'],
+    port:['Portfolio','Virtual portfolio + backtest "what if I bought..."'],
+    disc:'All data marked LIVE is real-time. Forecasts are estimates, not guarantees — not investment advice.',
+    close:'Close'
+  };
+
+  const row = (emoji, pair) => '<div style="margin-bottom:7px;font-size:11px;color:var(--t2);line-height:1.4;"><span style="font-size:13px;">' + emoji + '</span> <b style="color:var(--t1);">' + pair[0] + '</b> — ' + pair[1] + '</div>';
+  const section = (color, title, rows) => '<div style="background:var(--s2);border:1px solid var(--b1);border-radius:10px;padding:12px;margin-bottom:10px;"><div style="font-family:var(--mono);font-size:9px;color:' + color + ';font-weight:700;margin-bottom:8px;letter-spacing:.05em;">' + title + '</div>' + rows + '</div>';
+
+  const modal = document.createElement('div');
+  modal.id = 'helpModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;' + (he ? 'direction:rtl;' : '');
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.innerHTML = '<div style="background:var(--bg);border:1px solid var(--b1);border-radius:14px;padding:18px;max-width:520px;width:100%;max-height:85vh;overflow-y:auto;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">' +
+      '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--t1);">❓ ' + t.title + '</div>' +
+      '<button onclick="document.getElementById(\'helpModal\').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:18px;">✕</button>' +
+    '</div>' +
+    section('var(--blue)', t.topbar, row('☀️',t.theme)+row('🌐',t.web)+row('📈',t.finn)+row('📊',t.twelve)+row('🎯',t.conv)+row('🎭',t.ens)+row('🇺🇸',t.lang)) +
+    section('var(--green)', t.actions, row('▶️',t.run)+row('💰',t.quick)+row('🏆',t.top)+row('🚀',t.wsb)+row('⚡',t.opp)+row('🎯',t.sent)+row('🎰',t.penny)) +
+    section('var(--orange)', t.menu, row('📊',t.analyze)+row('⭐',t.watch)+row('💼',t.port)) +
+    '<div style="font-size:9px;color:var(--t3);text-align:center;font-style:italic;line-height:1.5;padding:4px;">' + t.disc + '</div>' +
+    '<button onclick="document.getElementById(\'helpModal\').remove()" style="width:100%;margin-top:12px;background:var(--green);color:var(--bg);border:none;padding:10px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">' + t.close + '</button>' +
+  '</div>';
+  document.body.appendChild(modal);
+}
+
+function translateLegend() {
+  const he = langMode === 'he';
+  const set = (id, en, heText) => { const el = document.getElementById(id); if (el) el.textContent = he ? heText : en; };
+
+  set('legendTitle', '— Button Guide —', '— מדריך לחצנים —');
+  set('legendTopbar', '⚙️ TOP BAR TOGGLES', '⚙️ לחצני סרגל עליון');
+  set('legendActions', '🔍 ANALYSIS TOOLS', '🔍 כלי ניתוח');
+  set('legendMenu', '☰ MENU PAGES', '☰ עמודי תפריט');
+
+  // Topbar
+  set('lg-theme','Theme','ערכת נושא'); set('lg-theme-d','Switch between light and dark mode','מעבר בין מצב בהיר לכהה');
+  set('lg-web','Web Search','חיפוש ברשת'); set('lg-web-d','Let the model search live news (more accurate, uses more tokens)','מאפשר למודל לחפש חדשות בזמן אמת (מדויק יותר, צורך יותר טוקנים)');
+  set('lg-finn','Finnhub','Finnhub'); set('lg-finn-d','Reliable prices + real news, analysts, insider & financials','מחירים אמינים + חדשות, אנליסטים, מנהלים ודוחות אמיתיים');
+  set('lg-twelve','Twelve Data','Twelve Data'); set('lg-twelve-d','Real RSI & MACD indicators (works when Yahoo is blocked)','אינדיקטורים אמיתיים RSI ו-MACD (עובד כש-Yahoo חסום)');
+  set('lg-conv','Conviction','רמת ביטחון'); set('lg-conv-d','ALL shows everything; HIGH only shows trades above 55% confidence','ALL מציג הכל; HIGH מציג רק עסקאות מעל 55% ביטחון');
+  set('lg-ens','Ensemble','אנסמבל'); set('lg-ens-d','2x runs two models in parallel for higher accuracy (uses 2x tokens)','2x מריץ שני מודלים במקביל לדיוק גבוה יותר (צורך פי 2 טוקנים)');
+  set('lg-lang','Language','שפה'); set('lg-lang-d','Toggle between English and Hebrew analysis','מעבר בין ניתוח באנגלית לעברית');
+
+  // Actions
+  set('lg-run','RUN','הרץ'); set('lg-run-d','Full deep analysis of one stock: forecasts, signals, fundamentals & outlook','ניתוח עומק מלא של מניה: תחזיות, אותות, נתונים פיננסיים ואופק');
+  set('lg-quick','Quick Decision','החלטה מהירה'); set('lg-quick-d','Fast Buy/Wait/Skip verdict for one stock with entry, stop & target','פסיקה מהירה קנה/המתן/דלג עם כניסה, סטופ ויעד');
+  set('lg-top','Top Pick Today','בחירת היום'); set('lg-top-d','Scans trending stocks for the one with the most bullish signals aligned','סורק מניות מדוברות ומוצא את זו עם הכי הרבה אותות חיוביים');
+  set('lg-wsb','WSB Hot','WSB חם'); set('lg-wsb-d','Most-discussed stocks on Reddit WallStreetBets in the last 48h','המניות הכי מדוברות ב-Reddit WallStreetBets ב-48 השעות האחרונות');
+  set('lg-opp','Opportunity Scanner','סורק הזדמנויות'); set('lg-opp-d','Finds stocks showing early signs of a potential move','מוצא מניות עם סימנים מוקדמים לתנועה אפשרית');
+  set('lg-sent','Sentiment Consensus','קונצנזוס סנטימנט'); set('lg-sent-d','Combines WSB buzz, volume & market mood into one score','משלב באזז WSB, נפח ומצב רוח שוק לציון אחד');
+  set('lg-penny','Penny Stock Scanner','סורק מניות אגורה'); set('lg-penny-d','High-risk speculative picks under $0.004 (gamble territory)','בחירות ספקולטיביות בסיכון גבוה מתחת ל-$0.004 (טריטוריית הימור)');
+
+  // Menu
+  set('lg-analyze','Analyze','ניתוח'); set('lg-analyze-d','The main stock analysis page (this screen)','עמוד ניתוח המניות הראשי (מסך זה)');
+  set('lg-watch','Watchlist','רשימת מעקב'); set('lg-watch-d','Tracked stocks + accuracy dashboard showing how often forecasts were right','מניות במעקב + לוח דיוק שמראה כמה פעמים התחזיות צדקו');
+  set('lg-port','Portfolio','תיק'); set('lg-port-d','Virtual portfolio to track positions and backtest "what if I bought..."','תיק וירטואלי למעקב אחר פוזיציות ובדיקת "מה אם הייתי קונה..."');
+
+  const disc = document.getElementById('legendDisclaimer');
+  if (disc) disc.textContent = he ? 'כל נתון המסומן LIVE הוא בזמן אמת. תחזיות הן הערכות הסתברותיות, לא הבטחות — לא ייעוץ השקעות.' : 'All data marked LIVE is real-time. Forecasts are probabilistic estimates, not guarantees — not investment advice.';
+}
+
 function toggleLang() {
   langMode = langMode === 'en' ? 'he' : 'en';
   localStorage.setItem('so_lang', langMode);
   document.body.classList.toggle('lang-he', langMode === 'he');
+  translateLegend();
   // Note: Fixed UI labels update instantly. Claude text (reasoning etc.) 
   // updates on the next RUN — Hebrew is sent to Claude in the prompt.
   
@@ -1815,6 +1979,7 @@ function updateTwelveBadge() {
   }
 }
 setTimeout(updateTwelveBadge, 100);
+setTimeout(() => { if (langMode === 'he') translateLegend(); }, 150);
 
 async function fetchTwelveIndicators(ticker) {
   if (!twelveKey) return null;
