@@ -743,8 +743,14 @@ async function showTopPick() {
       const rank24h = parseInt(wsb.rank_24h_ago) || rank;
       const rising = rank24h > rank + 3; // rising in WSB rankings
 
+      // Price crash filter — a stock down >15% today is NOT a buy signal
+      const todayChange = parseFloat(live.changePct) || 0;
+      const crashed = todayChange < -15;
+      const surged = todayChange > 20; // also risky — may be too late / pump
+
       // 1. WSB Signal (real - ApeWisdom)
-      const wsb_bull = mentions >= 100 && (mentionGrowth > 20 || rising);
+      // But if stock crashed today, WSB buzz is likely panic, not bullish
+      const wsb_bull = mentions >= 100 && (mentionGrowth > 20 || rising) && !crashed;
       signals.push({ name: 'WSB Buzz', bull: wsb_bull, real: true,
         detail: mentions + ' mentions' + (mentionGrowth > 0 ? ' +' + Math.round(mentionGrowth) + '%' : ''),
         icon: '🚀' });
@@ -789,9 +795,18 @@ async function showTopPick() {
         detail: fgData ? fgData.rating + ' (' + fg + ')' : 'N/A',
         icon: '🌡️' });
 
+      // 8th check: Today's momentum (penalize crashes heavily)
+      const momentum_bull = todayChange >= -3 && todayChange <= 15; // stable to mild up
+      signals.push({ name: 'Day Momentum', bull: momentum_bull, real: true,
+        detail: (todayChange >= 0 ? '+' : '') + todayChange.toFixed(1) + '% today' + (crashed ? ' ⚠️ crashed' : surged ? ' ⚠️ spiked' : ''),
+        icon: '📉' });
+
       const bullCount = signals.filter(s => s.bull).length;
       const realSignals = signals.filter(s => s.real).length;
-      const convergenceScore = realSignals > 0 ? (bullCount / 7) * 100 : 0;
+      const convergenceScore = realSignals > 0 ? (bullCount / 8) * 100 : 0;
+
+      // Hard penalty: if crashed today, cap the appeal
+      const crashPenalty = crashed ? -3 : 0;
 
       return {
         ticker: wsb.ticker,
@@ -799,8 +814,12 @@ async function showTopPick() {
         price: live.price,
         changePct: live.changePct,
         signals,
-        bullCount,
+        bullCount: Math.max(0, bullCount + crashPenalty),
+        rawBullCount: bullCount,
         convergenceScore,
+        crashed,
+        surged,
+        todayChange,
         beta,
         mentions,
         marketCap: live.marketCap,
@@ -815,29 +834,19 @@ async function showTopPick() {
     if (!winner) {
       throw new Error('No candidates found — check your connection and try again.');
     }
-    // Dynamic threshold: need >50% of AVAILABLE signals to be bullish
+    // HONEST THRESHOLD: A real "Top Pick" needs strong convergence
+    // If best stock has <4 bullish signals, there is NO good pick today
     const realCount = winner.signals.filter(s => s.real).length;
-    const required = realCount >= 4 ? Math.floor(realCount * 0.6) :
-                       realCount >= 2 ? Math.max(1, Math.floor(realCount * 0.5)) : 1;
-    if (winner.bullCount < required) {
-      // Still show the best pick with a warning instead of throwing
-      const bestMsg = 'Mixed signals today. Best available: ' + winner.ticker + 
-        ' (' + winner.bullCount + '/' + realCount + ' real signals bullish). Consider waiting for stronger setup.';
-      // render anyway with a warning overlay
-      const prompt = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) +
-        '. Stock: ' + winner.ticker + ' ($' + winner.price + '). Signals: ' +
-        winner.signals.map(s => s.name + ':' + (s.bull ? 'YES' : 'NO') + '(' + s.detail + ')').join(', ') +
-        '. Give a cautious verdict. Is it worth watching even if not a strong buy?' +
-        (langMode === 'he' ? ' Answer in Hebrew.' : '') +
-        ' JSON only: {"verdict":"2 sentences","entry":"$X","stop":"$X","target_1m":"$X","risk":"1 sentence","is_golden":false}';
-      try {
-        const raw = await toJSON(prompt, false);
-        const ai = extractJSON(raw);
-        ai._mixed_warning = bestMsg;
-        renderTopPick(winner, ai, scored.slice(1, 4), fgData);
-      } catch(_) {
-        throw new Error(bestMsg);
-      }
+
+    // Hard rule: need at least 4 bullish signals for a genuine "Top Pick"
+    // AND at least 50% of available signals must be bullish
+    const MIN_BULLISH_FOR_PICK = 4;
+    const enoughSignals = winner.bullCount >= MIN_BULLISH_FOR_PICK;
+    const goodRatio = realCount > 0 && (winner.bullCount / realCount) >= 0.5;
+
+    if (!enoughSignals || !goodRatio) {
+      // NO genuine Top Pick today — be honest, don't pretend
+      renderNoStrongPick(winner, scored.slice(0, 4), fgData);
       return;
     }
 
@@ -868,11 +877,54 @@ async function showTopPick() {
   }
 }
 
+function renderNoStrongPick(best, candidates, fgData) {
+  const el = document.getElementById('topPickResult');
+  if (!el) return;
+
+  // Build candidate list showing why none qualify
+  const candidatesHTML = candidates.map(c => {
+    const change = parseFloat(c.todayChange) || 0;
+    const changeColor = change >= 0 ? 'var(--green)' : 'var(--red)';
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--b1);">' +
+      '<div>' +
+        '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--t1);">' + c.ticker + '</span>' +
+        (c.crashed ? '<span style="font-size:9px;color:var(--red);margin-left:6px;">⚠️ crashed today</span>' : '') +
+        '<div style="font-size:10px;color:var(--t3);">' + c.bullCount + '/8 signals · $' + c.price + ' <span style="color:' + changeColor + ';">' + (change>=0?'+':'') + change.toFixed(1) + '%</span></div>' +
+      '</div>' +
+      '<button class="tp-runner-btn" data-tp-ticker="' + c.ticker + '" style="background:transparent;border:1px solid var(--b2);color:var(--t3);padding:4px 10px;border-radius:6px;font-family:var(--mono);font-size:9px;cursor:pointer;">Analyze</button>' +
+    '</div>';
+  }).join('');
+
+  el.innerHTML = '<div style="padding:0 14px 14px;">' +
+    '<div style="background:linear-gradient(135deg,rgba(255,208,96,.08),rgba(255,68,102,.04));border:2px solid rgba(255,208,96,.3);border-radius:14px;padding:18px;">' +
+
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;">' +
+        '<div style="flex:1;">' +
+          '<div style="font-size:32px;margin-bottom:6px;">🤚</div>' +
+          '<div style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--yellow);">No Strong Pick Today</div>' +
+          '<div style="font-size:12px;color:var(--t2);margin-top:6px;line-height:1.5;">None of today\'s trending stocks show strong signal convergence. The best candidate only has ' + best.bullCount + '/8 bullish signals — not enough conviction for a confident pick.</div>' +
+        '</div>' +
+        '<button class="tp-close-btn" style="background:none;border:none;color:var(--t3);font-size:18px;cursor:pointer;flex-shrink:0;">✕</button>' +
+      '</div>' +
+
+      '<div style="background:rgba(77,168,255,.06);border:1px solid rgba(77,168,255,.2);border-radius:8px;padding:10px;margin-bottom:12px;font-size:11px;color:var(--blue);line-height:1.5;">' +
+        '💡 <b>This is a good thing.</b> A disciplined system says "no" more often than "yes". Forcing a trade when signals are weak is how money is lost. Better to wait for a high-conviction setup.' +
+      '</div>' +
+
+      '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Today\'s Candidates (none strong enough)</div>' +
+      candidatesHTML +
+
+      (fgData ? '<div style="margin-top:12px;padding:8px;background:var(--bg);border-radius:7px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--t3);">Market Mood: <b style="color:' + (fgData.score < 30 ? 'var(--red)' : fgData.score > 70 ? 'var(--green)' : 'var(--yellow)') + ';">' + fgData.rating + ' (' + fgData.score + ')</b></div>' : '') +
+
+    '</div>' +
+  '</div>';
+}
+
 function renderTopPick(winner, ai, runners, fgData) {
   const el = document.getElementById('topPickResult');
   if (!el) return;
 
-  const isGolden = ai?.is_golden || winner.bullCount >= 6;
+  const isGolden = winner.bullCount >= 7; // 7+/8 signals = truly golden
   const bullPct = Math.round((winner.bullCount / 7) * 100);
   const barColor = bullPct >= 85 ? 'var(--green)' : bullPct >= 70 ? 'var(--blue)' : 'var(--yellow)';
 
@@ -917,7 +969,7 @@ function renderTopPick(winner, ai, runners, fgData) {
         '<div style="text-align:right;">' +
           '<button class="tp-close-btn" style="background:none;border:none;color:var(--t3);font-size:18px;cursor:pointer;display:block;margin-left:auto;">✕</button>' +
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);">Convergence</div>' +
-          '<div style="font-family:var(--mono);font-size:26px;font-weight:700;color:' + barColor + ';line-height:1;">' + winner.bullCount + '<span style="font-size:13px;color:var(--t3);">/7</span></div>' +
+          '<div style="font-family:var(--mono);font-size:26px;font-weight:700;color:' + barColor + ';line-height:1;">' + winner.bullCount + '<span style="font-size:13px;color:var(--t3);">/8</span></div>' +
         '</div>' +
       '</div>' +
 
@@ -1504,7 +1556,7 @@ function extractJSON(raw) {
 }
 
 // ── Prompts ────────────────────────────────────────────────────
-function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData) {
+function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData, fhData) {
   const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const price = liveData?.price ? `Current price: $${liveData.price} (${liveData.change>=0?'+':''}${liveData.change}, ${liveData.changePct}%). 52W: $${liveData.low52}-$${liveData.high52}. Vol: ${liveData.volume}. MCap: ${liveData.marketCap}. PE: ${liveData.pe}. Target: ${liveData.targetPrice}.` : '';
   const techs = liveData?.rsi && liveData.rsi!=='—' ? `RSI(14):${liveData.rsi} MACD:${liveData.macd} Signal:${liveData.macdSignal} BB:${liveData.bb_lower}-${liveData.bb_mid}-${liveData.bb_upper} Put/Call:${liveData.putCallRatio}.` : '';
@@ -1535,6 +1587,28 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
 
   // Sector rotation signal
+  // === Finnhub Extended Data (real news, analysts, insider) ===
+  const fhCtx = (() => {
+    if (!fhData) return '';
+    const parts = [];
+    // Analyst consensus
+    if (fhData.fhAnalysts) {
+      const a = fhData.fhAnalysts;
+      parts.push('Analysts:' + a.consensus + '(' + a.bullishPct + '% bullish,' + a.strongBuy + ' strongBuy,' + a.buy + ' buy,' + a.hold + ' hold,' + a.sell + ' sell)');
+    }
+    // News sentiment (just count + headlines for Claude to assess)
+    if (fhData.fhNews && fhData.fhNews.headlines.length > 0) {
+      const headlines = fhData.fhNews.headlines.slice(0, 3).map(h => h.headline).join(' | ');
+      parts.push('RecentNews(' + fhData.fhNews.count + '):' + headlines);
+    }
+    // Insider activity
+    if (fhData.fhInsider) {
+      const i = fhData.fhInsider;
+      parts.push('Insiders:' + i.signal + '(' + i.buys + ' buys,' + i.sells + ' sells over 90d)');
+    }
+    return parts.length > 0 ? parts.join('. ') + '.' : '';
+  })();
+
   // === Macro environment ===
   const macroCtx = macroData?.summary || '';
   // High VIX/yields = penalty on bullish; risk-off = lower confidence
@@ -1754,6 +1828,84 @@ async function fetchTwelveIndicators(ticker) {
     console.warn('Twelve Data failed:', e.message);
     return null;
   }
+}
+
+// ── Finnhub Extended Data (free tier endpoints) ──────────────
+// News, analyst ratings, earnings, insider — all real data
+
+async function fetchFinnhubNews(ticker) {
+  if (!finnhubKey) return null;
+  try {
+    const to = new Date().toISOString().split('T')[0];
+    const from = new Date(Date.now() - 7*86400000).toISOString().split('T')[0];
+    const url = `https://finnhub.io/api/v1/company-news?symbol=${ticker}&from=${from}&to=${to}&token=${finnhubKey}`;
+    const r = await fetch(url, {signal: AbortSignal.timeout(6000)});
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    // Take 5 most recent headlines
+    const recent = data.slice(0, 5).map(n => ({
+      headline: n.headline,
+      summary: (n.summary || '').slice(0, 150),
+      source: n.source,
+      date: new Date(n.datetime * 1000).toLocaleDateString(),
+    }));
+    return { count: data.length, headlines: recent };
+  } catch(_) { return null; }
+}
+
+async function fetchFinnhubAnalysts(ticker) {
+  if (!finnhubKey) return null;
+  try {
+    const url = `https://finnhub.io/api/v1/stock/recommendation?symbol=${ticker}&token=${finnhubKey}`;
+    const r = await fetch(url, {signal: AbortSignal.timeout(5000)});
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const latest = data[0]; // most recent period
+    const total = (latest.strongBuy||0) + (latest.buy||0) + (latest.hold||0) + (latest.sell||0) + (latest.strongSell||0);
+    if (total === 0) return null;
+    const bullish = (latest.strongBuy||0) + (latest.buy||0);
+    const bearish = (latest.sell||0) + (latest.strongSell||0);
+    return {
+      strongBuy: latest.strongBuy||0,
+      buy: latest.buy||0,
+      hold: latest.hold||0,
+      sell: latest.sell||0,
+      strongSell: latest.strongSell||0,
+      total,
+      bullishPct: Math.round((bullish/total)*100),
+      bearishPct: Math.round((bearish/total)*100),
+      period: latest.period,
+      consensus: bullish > bearish*1.5 ? 'Buy' : bearish > bullish*1.5 ? 'Sell' : 'Hold',
+    };
+  } catch(_) { return null; }
+}
+
+async function fetchFinnhubInsider(ticker) {
+  if (!finnhubKey) return null;
+  try {
+    const from = new Date(Date.now() - 90*86400000).toISOString().split('T')[0];
+    const to = new Date().toISOString().split('T')[0];
+    const url = `https://finnhub.io/api/v1/stock/insider-transactions?symbol=${ticker}&from=${from}&to=${to}&token=${finnhubKey}`;
+    const r = await fetch(url, {signal: AbortSignal.timeout(5000)});
+    if (!r.ok) return null;
+    const data = await r.json();
+    const txns = data?.data || [];
+    if (txns.length === 0) return null;
+    let buys = 0, sells = 0, buyShares = 0, sellShares = 0;
+    txns.forEach(t => {
+      const change = t.change || 0;
+      if (change > 0) { buys++; buyShares += change; }
+      else if (change < 0) { sells++; sellShares += Math.abs(change); }
+    });
+    return {
+      buys, sells,
+      netShares: buyShares - sellShares,
+      signal: buyShares > sellShares*1.5 ? 'Bullish' : sellShares > buyShares*1.5 ? 'Bearish' : 'Neutral',
+      total: txns.length,
+    };
+  } catch(_) { return null; }
 }
 
 // ── Finnhub API Integration ──────────────────────────────────
@@ -2997,13 +3149,18 @@ async function runAnalysis(sym) {
 
   try {
     // Fetch all data sources in parallel with hard 6s cap
-    const [liveData, insiderData, trendsData, shortData, optionsData, macroData] = await Promise.all([
+    const [liveData, insiderData, trendsData, shortData, optionsData, macroData,
+           fhNews, fhAnalysts, fhInsider] = await Promise.all([
       withTimeout(fetchLivePrice(t),      6000),
       withTimeout(fetchInsiderTrading(t), 4000),
       withTimeout(fetchGoogleTrends(t),   4000),
       withTimeout(fetchShortInterest(t),  4000),
       withTimeout(fetchOptionsFlow(t),    4000),
       withTimeout(fetchMacroData(),       5000),
+      // Finnhub extended data (real news, analysts, insider) — only if key set
+      finnhubKey ? withTimeout(fetchFinnhubNews(t),     6000) : Promise.resolve(null),
+      finnhubKey ? withTimeout(fetchFinnhubAnalysts(t), 5000) : Promise.resolve(null),
+      finnhubKey ? withTimeout(fetchFinnhubInsider(t),  5000) : Promise.resolve(null),
     ]);
     // Steps 1+2 done after data fetch
     if(window._advanceStep) { window._advanceStep(); window._advanceStep(); }
@@ -3073,7 +3230,7 @@ async function runAnalysis(sym) {
     // Live data status — only show warning AFTER analysis, not during loading
     // (The post-analysis warning handles this if needed)
     if(window._advanceStep) window._advanceStep(); // Step: Running AI
-    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData), useWebSearch);
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData, {fhNews, fhAnalysts, fhInsider}), useWebSearch);
     if(window._advanceStep) window._advanceStep(); // Step: Building report
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
@@ -3178,6 +3335,9 @@ async function runAnalysis(sym) {
     clearInterval(window._elapsedInterval);
     window.currentTicker = t;
     window.currentParsed = parsed;
+    parsed._fhNews = fhNews;
+    parsed._fhAnalysts = fhAnalysts;
+    parsed._fhInsider = fhInsider;
     renderAnalysis(t, parsed);
     document.getElementById('liveLabel').textContent = 'LIVE';
   } catch (e) {
@@ -3566,6 +3726,65 @@ function renderAnalysis(ticker, d) {
           rowsHTML +
         '</div>' +
       '</div>';
+    })()}
+
+    ${(()=>{
+      // Analyst Consensus card (real Finnhub data)
+      if (!d._fhAnalysts) return '';
+      const a = d._fhAnalysts;
+      const consColor = a.consensus === 'Buy' ? 'var(--green)' : a.consensus === 'Sell' ? 'var(--red)' : 'var(--yellow)';
+      const maxVal = Math.max(a.strongBuy, a.buy, a.hold, a.sell, a.strongSell, 1);
+      const bar = (val, color, label) => 
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">' +
+          '<span style="font-family:var(--mono);font-size:9px;color:var(--t3);width:70px;">' + label + '</span>' +
+          '<div style="flex:1;height:14px;background:var(--b2);border-radius:3px;overflow:hidden;">' +
+            '<div style="height:100%;width:' + (val/maxVal*100) + '%;background:' + color + ';border-radius:3px;"></div>' +
+          '</div>' +
+          '<span style="font-family:var(--mono);font-size:10px;color:var(--t1);width:20px;text-align:right;">' + val + '</span>' +
+        '</div>';
+      return '<div class="card"><div class="ch">🎯 ' + (langMode==='he'?'המלצות אנליסטים':'Analyst Consensus') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
+        '<div class="cb">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
+            '<span style="font-family:var(--mono);font-size:18px;font-weight:700;color:' + consColor + ';">' + a.consensus.toUpperCase() + '</span>' +
+            '<span style="font-size:11px;color:var(--t3);">' + a.total + ' analysts · ' + a.bullishPct + '% bullish</span>' +
+          '</div>' +
+          bar(a.strongBuy, 'var(--green)', 'Strong Buy') +
+          bar(a.buy, '#5fb87a', 'Buy') +
+          bar(a.hold, 'var(--yellow)', 'Hold') +
+          bar(a.sell, '#e08a8a', 'Sell') +
+          bar(a.strongSell, 'var(--red)', 'Strong Sell') +
+        '</div></div>';
+    })()}
+
+    ${(()=>{
+      // Latest News card (real Finnhub headlines)
+      if (!d._fhNews || !d._fhNews.headlines || d._fhNews.headlines.length === 0) return '';
+      const news = d._fhNews;
+      const items = news.headlines.map(h => 
+        '<div style="padding:8px 0;border-bottom:1px solid var(--b1);">' +
+          '<div style="font-size:11px;color:var(--t1);line-height:1.4;margin-bottom:3px;">' + h.headline + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);font-family:var(--mono);">' + h.source + ' · ' + h.date + '</div>' +
+        '</div>'
+      ).join('');
+      return '<div class="card"><div class="ch">📰 ' + (langMode==='he'?'חדשות אחרונות':'Latest News') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
+        '<div class="cb">' +
+          '<div style="font-size:10px;color:var(--t3);margin-bottom:8px;">' + news.count + ' articles in last 7 days</div>' +
+          items +
+        '</div></div>';
+    })()}
+
+    ${(()=>{
+      // Insider Activity card (real Finnhub data)
+      if (!d._fhInsider) return '';
+      const ins = d._fhInsider;
+      const sigColor = ins.signal === 'Bullish' ? 'var(--green)' : ins.signal === 'Bearish' ? 'var(--red)' : 'var(--yellow)';
+      return '<div class="card"><div class="ch">👔 ' + (langMode==='he'?'פעילות מנהלים':'Insider Activity') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
+        '<div class="cb">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+            '<span style="font-family:var(--mono);font-size:16px;font-weight:700;color:' + sigColor + ';">' + ins.signal + '</span>' +
+            '<span style="font-size:11px;color:var(--t3);">' + ins.buys + ' buys · ' + ins.sells + ' sells (90d)</span>' +
+          '</div>' +
+        '</div></div>';
     })()}
 
     ${txtCard(tr('Key Catalysts'), d.key_catalysts, 'var(--green)')}
