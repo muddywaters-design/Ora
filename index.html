@@ -4382,9 +4382,11 @@ function renderWatchlist() {
   });
 
   // Sort watchlist safely
+  // Guard: ensure watchlist is always a valid array before spreading
+  if (!Array.isArray(watchlist)) watchlist = [];
   let sorted = [];
   try {
-    sorted = [...watchlist].sort((a, b) => {
+    sorted = [...(watchlist || [])].sort((a, b) => {
       try {
         if (wlSortBy === 'change_pct') {
           const av = typeof a.liveChange === 'number' ? a.liveChange : -999;
@@ -4404,7 +4406,7 @@ function renderWatchlist() {
       } catch(sortErr) { return 0; }
     });
   } catch(e) {
-    sorted = [...watchlist]; // fallback: no sort
+    sorted = [...(watchlist || [])]; // fallback: no sort
   }
 
   const tbl = document.getElementById('wlTable');
@@ -4412,7 +4414,7 @@ function renderWatchlist() {
   
   // Emergency: if sorted empty but watchlist has items, use watchlist directly
   const displayList = (sorted.length > 0) ? sorted : 
-                      (watchlist.length > 0 ? [...watchlist] : []);
+                      ((watchlist && watchlist.length > 0) ? [...watchlist] : []);
 
   if (displayList.length === 0) {
     // Show what's actually in localStorage
@@ -6406,6 +6408,12 @@ async function refreshPortfolio() {
   const btn = document.getElementById('refreshPortfolioBtn');
   if (btn) { btn.textContent = '⏳ Updating…'; btn.disabled = true; }
 
+  // Guard: ensure positions is a valid array
+  if (!portfolio || !Array.isArray(portfolio.positions) || portfolio.positions.length === 0) {
+    if (btn) { btn.textContent = '↻ Refresh Prices'; btn.disabled = false; }
+    return;
+  }
+
   // Clear price cache to force fresh fetches
   if (typeof priceCache !== 'undefined') {
     portfolio.positions.forEach(p => { delete priceCache[p.ticker?.toUpperCase()]; });
@@ -6415,7 +6423,7 @@ async function refreshPortfolio() {
   await Promise.allSettled(
     portfolio.positions.map(pos =>
       fetchLivePrice(pos.ticker).then(live => {
-        if (live?.price) {
+        if (live?.price && live.price !== '—') {
           pos.currentPrice  = parseFloat(live.price);
           if (live.prevClose) pos.prevClose = parseFloat(live.prevClose);
           pos.lastUpdated   = new Date().toISOString();
@@ -6423,7 +6431,10 @@ async function refreshPortfolio() {
         } else {
           failed++;
         }
-      }).catch(() => { failed++; })
+      }).catch(err => {
+        console.warn('Portfolio update failed for ' + pos.ticker + ':', err?.message || err);
+        failed++;
+      })
     )
   );
 
@@ -6725,6 +6736,18 @@ async function runBacktest() {
     return;
   }
 
+  // Validate dates before any math (prevents NaN annual return)
+  const _d1 = new Date(buyDate);
+  const _d2 = new Date(sellDate);
+  if (isNaN(_d1.getTime()) || isNaN(_d2.getTime())) {
+    if (result) result.innerHTML = `<div style="color:var(--red);font-size:12px;">⚠️ ${langMode==='he'?'תאריכים לא תקינים. אנא בדוק שוב.':'Invalid dates. Please check and try again.'}</div>`;
+    return;
+  }
+  if (_d2 <= _d1) {
+    if (result) result.innerHTML = `<div style="color:var(--red);font-size:12px;">⚠️ ${langMode==='he'?'תאריך המכירה חייב להיות אחרי תאריך הקנייה.':'Sell date must be after buy date.'}</div>`;
+    return;
+  }
+
   const btn = document.querySelector('#backtestPanel button[onclick="runBacktest()"]');
   if (btn) { btn.textContent = '⏳ Fetching historical data…'; btn.disabled = true; }
   if (result) result.innerHTML = `<div style="font-family:var(--mono);font-size:10px;color:var(--t3);padding:10px 0;">Fetching prices from Yahoo Finance…</div>`;
@@ -6787,7 +6810,8 @@ async function runBacktest() {
 
     // Annualized return
     const days = Math.max(1, (new Date(sellDate) - new Date(buyDate)) / 86400000);
-    const annualReturn = (Math.pow(sellValueUSD/investedUSD, 365/days) - 1) * 100;
+    let annualReturn = (Math.pow(sellValueUSD/investedUSD, 365/days) - 1) * 100;
+    if (!isFinite(annualReturn) || isNaN(annualReturn)) annualReturn = 0;
 
     if (result) result.innerHTML = `
       <div style="background:var(--s2);border:1px solid ${col}40;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;">
