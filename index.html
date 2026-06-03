@@ -1828,7 +1828,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
-    system: 'You are StockOracle, a quant analyst. First, think through your analysis inside <analysis_scratchpad>...</analysis_scratchpad> tags: weigh the bull vs bear case, note which signals agree/conflict, and flag the biggest risk. Keep the scratchpad concise (4-8 short lines). THEN output the JSON payload (and nothing else after it). Steps: (1)Search news if enabled. (2)Analyze technicals+macro+fundamentals. (3)Counter-argue why you might be wrong. (4)For each timeframe give prob_up+prob_flat+prob_down=100. Direction=highest prob. Confidence>70% only if 4+ signals agree. Wide ranges. Include bull/bear cases. The JSON must be valid and complete.',
+    system: 'You are StockOracle, a quant analyst. First, think through your analysis inside <analysis_scratchpad>...</analysis_scratchpad> tags: weigh the bull vs bear case, note which signals agree/conflict, and flag the biggest risk. Keep the scratchpad concise (4-8 short lines). THEN output the JSON payload (and nothing else after it). Steps: (1)Search news if enabled. (2)Analyze technicals+macro+fundamentals. (3)Counter-argue why you might be wrong. (4)For each timeframe give prob_up+prob_flat+prob_down=100. Direction=highest prob. Confidence>70% only if 4+ signals agree. Wide ranges. Include bull/bear cases. CRITICAL: Base your forecast ONLY on the data provided in this prompt and information available up to today — never assume knowledge of future prices, earnings, or events that have not happened yet (no data leakage). The JSON must be valid and complete.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -2163,6 +2163,28 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     } catch(_) { return ''; }
   })();
 
+  // Price momentum 7/30/90d + SMA distance (#1 feature engineering)
+  const momentumCtx = (() => {
+    try {
+      const closes = liveData?._closes || [];
+      if (closes.length < 8) return '';
+      const mom = calcMomentum(closes);
+      const smaD = calcSMADistance(closes);
+      const parts = [];
+      if (mom) {
+        const fmt = (v) => v == null ? '?' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+        parts.push('Momentum[7d=' + fmt(mom.d7) + ',30d=' + fmt(mom.d30) + ',90d=' + fmt(mom.d90) + ']');
+      }
+      if (smaD && smaD.dist50 != null) {
+        parts.push('Price' + (smaD.dist50 >= 0 ? '+' : '') + smaD.dist50.toFixed(1) + '%vs50SMA');
+      }
+      if (smaD && smaD.dist200 != null) {
+        parts.push((smaD.dist200 >= 0 ? '+' : '') + smaD.dist200.toFixed(1) + '%vs200SMA');
+      }
+      return parts.length ? parts.join(',') + '.' : '';
+    } catch(_) { return ''; }
+  })();
+
   const breakoutCtx = (() => {
     if (!liveData?.price || !liveData?.high52 || !liveData?.low52) return '';
     const p=parseFloat(liveData.price), h=parseFloat(liveData.high52), l=parseFloat(liveData.low52);
@@ -2175,7 +2197,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
   const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
   const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level, fundamental_outlook.summary, full_analysis) IN HEBREW. Numbers, tickers, and verdict codes stay in English.' : '';
-  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx}
+  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","fundamental_outlook":{"summary":"2-3 sentences on financial health","health_score":"1-10","bull_target_pct":"+X%","bear_target_pct":"-X%","base_case_pct":"+/-X%","verdict":"STRONG|HEALTHY|MIXED|WEAK|RISKY"},"full_analysis":"3 sentences."}`;
 }
@@ -3394,6 +3416,84 @@ function calcBollinger(closes, period=20, mult=2) {
   return { upper: mid+mult*std, lower: mid-mult*std, mid };
 }
 
+// === Persistent Data Cache (#2) — 4h TTL for slow-changing data ===
+// Fundamentals, SEC filings, macro, and historical prices change at most daily.
+// Caching them in localStorage avoids redundant API calls and re-sending bulky arrays.
+const DATA_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
+const DATA_CACHE_PREFIX = 'so_dc_';
+
+function getCachedData(key) {
+  try {
+    const raw = localStorage.getItem(DATA_CACHE_PREFIX + key);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || !obj.t || (Date.now() - obj.t) > DATA_CACHE_TTL) {
+      localStorage.removeItem(DATA_CACHE_PREFIX + key);
+      return null;
+    }
+    return obj.v;
+  } catch(_) { return null; }
+}
+
+function setCachedData(key, value) {
+  try {
+    localStorage.setItem(DATA_CACHE_PREFIX + key, JSON.stringify({ t: Date.now(), v: value }));
+  } catch(e) {
+    // localStorage full — clear old data cache entries and retry once
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith(DATA_CACHE_PREFIX)).forEach(k => localStorage.removeItem(k));
+      localStorage.setItem(DATA_CACHE_PREFIX + key, JSON.stringify({ t: Date.now(), v: value }));
+    } catch(_) {}
+  }
+}
+
+// Wrap an async fetcher with persistent caching. Returns cached value if fresh.
+async function cachedFetch(key, fetcherFn) {
+  const cached = getCachedData(key);
+  if (cached !== null) return cached;
+  const fresh = await fetcherFn();
+  if (fresh !== null && fresh !== undefined) setCachedData(key, fresh);
+  return fresh;
+}
+
+// === Feature Engineering: Price Momentum (#1) ===
+// Computes % change over 7/30/90 trading days from a closes[] array.
+function calcMomentum(closes) {
+  if (!Array.isArray(closes) || closes.length < 2) return null;
+  const last = closes[closes.length - 1];
+  const pctChange = (daysBack) => {
+    const idx = closes.length - 1 - daysBack;
+    if (idx < 0) return null;
+    const past = closes[idx];
+    if (!past) return null;
+    return ((last - past) / past) * 100;
+  };
+  return {
+    d7:  pctChange(7),
+    d30: pctChange(30),
+    d90: pctChange(90),
+  };
+}
+
+// SMA distance: how far current price sits above/below the 50 & 200 SMA
+function calcSMADistance(closes) {
+  if (!Array.isArray(closes) || closes.length < 1) return null;
+  const price = closes[closes.length - 1];
+  const sma = (period) => {
+    if (closes.length < period) return null;
+    const slice = closes.slice(-period);
+    return slice.reduce((a,b)=>a+b,0) / period;
+  };
+  const sma50 = sma(50);
+  const sma200 = sma(200);
+  return {
+    sma50, sma200,
+    dist50:  sma50  ? ((price - sma50)  / sma50)  * 100 : null,
+    dist200: sma200 ? ((price - sma200) / sma200) * 100 : null,
+    goldenCross: (sma50 && sma200) ? sma50 > sma200 : null, // 50 above 200 = bullish
+  };
+}
+
 function formatMarketCap(n) {
   if (n >= 1e12) return (n/1e12).toFixed(2)+'T';
   if (n >= 1e9)  return (n/1e9).toFixed(2)+'B';
@@ -3469,14 +3569,14 @@ async function runAnalysis(sym) {
       withTimeout(fetchGoogleTrends(t),   4000),
       withTimeout(fetchShortInterest(t),  4000),
       withTimeout(fetchOptionsFlow(t),    4000),
-      withTimeout(fetchMacroData(),       5000),
+      withTimeout(cachedFetch('macro', () => fetchMacroData()), 5000),
       // Finnhub extended data (real news, analysts, insider) — only if key set
       finnhubKey ? withTimeout(fetchFinnhubNews(t),     6000) : Promise.resolve(null),
       finnhubKey ? withTimeout(fetchFinnhubAnalysts(t), 5000) : Promise.resolve(null),
       finnhubKey ? withTimeout(fetchFinnhubInsider(t),  5000) : Promise.resolve(null),
       // Fundamental financials (real reports)
-      finnhubKey ? withTimeout(fetchFinnhubFinancials(t), 6000) : Promise.resolve(null),
-      withTimeout(fetchSECFinancials(t), 9000),
+      finnhubKey ? withTimeout(cachedFetch('fin_' + t, () => fetchFinnhubFinancials(t)), 6000) : Promise.resolve(null),
+      withTimeout(cachedFetch('sec_' + t, () => fetchSECFinancials(t)), 9000),
     ]);
     // Steps 1+2 done after data fetch
     if(window._advanceStep) { window._advanceStep(); window._advanceStep(); }
@@ -4353,6 +4453,12 @@ async function runAllAccuracy() {
         weekVerdict === 'CLOSE'|| monthVerdict === 'CLOSE'? 'CLOSE':
         weekVerdict === 'MISS' || monthVerdict === 'MISS' ? 'MISS' : 'PENDING';
 
+      // Confidence for Brier score: prefer week, fallback month
+      const confPct = entry.data?.forecasts?.week?.confidence 
+                   || entry.data?.forecasts?.month?.confidence 
+                   || entry.forecasts?.week?.confidence
+                   || entry.forecasts?.month?.confidence
+                   || null;
       results.push({
         ticker: entry.ticker,
         company: entry.company,
@@ -4360,6 +4466,8 @@ async function runAllAccuracy() {
         forecastPrice: forecastPrice ? `$${forecastPrice.toFixed(2)}` : '—',
         currentPrice: currentPrice ? `$${currentPrice.toFixed(2)}` : '—',
         actualChange: actualChangePct !== null ? (actualChangePct >= 0 ? '+' : '') + actualChangePct.toFixed(2) + '%' : '—',
+        actualChangeNum: actualChangePct,  // numeric, for Sharpe/Drawdown
+        confidencePct: confPct,             // for Brier score
         weekForecast: weekF || '—',
         monthForecast: monthF || '—',
         weekVerdict, monthVerdict, overallVerdict,
@@ -4383,6 +4491,69 @@ async function runAllAccuracy() {
   btn.textContent = '⚡ Check All Forecasts';
 }
 
+// === Professional Statistical Metrics (#4) ===
+// Computed from forecastHistory outcomes. All pure client-side math.
+function computeProMetrics(results) {
+  const m = { brier: null, sharpe: null, maxDrawdown: null, paperTrades: 0, avgReturn: null, sampleSize: 0 };
+
+  // --- Brier Score: calibration of probability estimates ---
+  // For each evaluated forecast: predicted prob (confidence/100) vs outcome (1 if direction correct, else 0).
+  // Brier = mean((prob - outcome)^2). Lower = better calibrated. 0=perfect, 0.25=coinflip, 1=worst.
+  const brierPairs = [];
+  results.forEach(r => {
+    if (r.overallVerdict === 'PENDING' || r.confidencePct == null) return;
+    const prob = Math.max(0, Math.min(1, r.confidencePct / 100));
+    // Outcome: HIT or CLOSE in the correct direction counts as 1, MISS as 0
+    const outcome = (r.overallVerdict === 'HIT') ? 1 : (r.overallVerdict === 'CLOSE') ? 0.5 : 0;
+    brierPairs.push((prob - outcome) ** 2);
+  });
+  if (brierPairs.length >= 3) {
+    m.brier = brierPairs.reduce((a,b)=>a+b,0) / brierPairs.length;
+    m.sampleSize = brierPairs.length;
+  }
+
+  // --- Paper-trade simulation: high-confidence bullish picks ---
+  // Treat each Confidence>70% Bullish forecast as a virtual long. Use actualChange as the return.
+  const returns = [];
+  results.forEach(r => {
+    if (r.overallVerdict === 'PENDING') return;
+    const conf = r.confidencePct || 0;
+    const isBullish = (r.weekForecast && /up|bull|\+/i.test(r.weekForecast)) ||
+                      (r.monthForecast && /up|bull|\+/i.test(r.monthForecast));
+    if (conf >= 70 && isBullish && r.actualChangeNum != null) {
+      returns.push(r.actualChangeNum); // % return of this paper trade
+    }
+  });
+  m.paperTrades = returns.length;
+
+  if (returns.length >= 2) {
+    // Average return
+    const avg = returns.reduce((a,b)=>a+b,0) / returns.length;
+    m.avgReturn = avg;
+
+    // Sharpe ratio (simplified): mean return / std dev of returns.
+    // No risk-free rate subtraction (short horizons); this is a relative volatility-adjusted score.
+    const variance = returns.reduce((a,b)=>a+(b-avg)**2,0) / returns.length;
+    const std = Math.sqrt(variance);
+    m.sharpe = std > 0 ? avg / std : null;
+
+    // Max Drawdown: largest peak-to-trough decline of a cumulative equity curve
+    // built by compounding the paper-trade returns in sequence.
+    let equity = 100, peak = 100, maxDD = 0;
+    // Oldest-first for a chronological curve
+    const chrono = returns.slice().reverse();
+    chrono.forEach(ret => {
+      equity = equity * (1 + ret / 100);
+      if (equity > peak) peak = equity;
+      const dd = (peak - equity) / peak * 100;
+      if (dd > maxDD) maxDD = dd;
+    });
+    m.maxDrawdown = maxDD;
+  }
+
+  return m;
+}
+
 function renderAccDashboard(results) {
   const dashboard = document.getElementById('accDashboard');
   if (!dashboard) return;
@@ -4394,6 +4565,7 @@ function renderAccDashboard(results) {
   const total   = results.length;
   const evaluated = hits + closes + misses;
   const winRate = evaluated > 0 ? Math.round((hits + closes * 0.5) / evaluated * 100) : 0;
+  const pro = computeProMetrics(results); // Brier, Sharpe, Max Drawdown (#4)
 
   const verdictBadge = (v) => {
     const map = { HIT:'✓ HIT', CLOSE:'~ CLOSE', MISS:'✗ MISS', PENDING:'⏳ PENDING' };
@@ -4445,6 +4617,56 @@ function renderAccDashboard(results) {
       </div>
 
       ${pending > 0 ? `<div style="padding:6px 16px 10px;"><span style="font-size:10px;color:var(--blue);">⏳ ${pending} stock${pending>1?'s':''} still pending — not enough time has passed to evaluate.</span></div>` : ''}
+
+      ${(() => {
+        // Professional metrics panel (#4)
+        if (pro.brier == null && pro.sharpe == null) return '';
+        const he = (typeof langMode !== 'undefined' && langMode === 'he');
+        // Brier interpretation
+        let brierCard = '';
+        if (pro.brier != null) {
+          const b = pro.brier;
+          const bColor = b <= 0.15 ? 'var(--green)' : b <= 0.25 ? 'var(--yellow)' : 'var(--red)';
+          const bLabel = b <= 0.15 ? (he?'מכויל היטב':'Well calibrated') : b <= 0.25 ? (he?'סביר':'Fair') : (he?'לא מכויל':'Poorly calibrated');
+          brierCard = '<div style="flex:1;min-width:90px;padding:10px;background:var(--bg);border-radius:8px;text-align:center;">' +
+            '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Brier Score</div>' +
+            '<div style="font-family:var(--mono);font-size:18px;font-weight:700;color:' + bColor + ';margin-top:2px;">' + b.toFixed(3) + '</div>' +
+            '<div style="font-size:8px;color:' + bColor + ';margin-top:1px;">' + bLabel + '</div>' +
+            '<div style="font-size:7px;color:var(--t3);margin-top:1px;">' + pro.sampleSize + ' forecasts</div>' +
+          '</div>';
+        }
+        // Sharpe + Drawdown (paper trades)
+        let sharpeCard = '', ddCard = '';
+        if (pro.sharpe != null) {
+          const s = pro.sharpe;
+          const sColor = s >= 1 ? 'var(--green)' : s >= 0 ? 'var(--yellow)' : 'var(--red)';
+          sharpeCard = '<div style="flex:1;min-width:90px;padding:10px;background:var(--bg);border-radius:8px;text-align:center;">' +
+            '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Sharpe</div>' +
+            '<div style="font-family:var(--mono);font-size:18px;font-weight:700;color:' + sColor + ';margin-top:2px;">' + s.toFixed(2) + '</div>' +
+            '<div style="font-size:8px;color:var(--t3);margin-top:1px;">' + (he?'תשואה/סיכון':'risk-adj.') + '</div>' +
+          '</div>';
+        }
+        if (pro.maxDrawdown != null) {
+          const dd = pro.maxDrawdown;
+          const ddColor = dd <= 10 ? 'var(--green)' : dd <= 25 ? 'var(--yellow)' : 'var(--red)';
+          ddCard = '<div style="flex:1;min-width:90px;padding:10px;background:var(--bg);border-radius:8px;text-align:center;">' +
+            '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Max DD</div>' +
+            '<div style="font-family:var(--mono);font-size:18px;font-weight:700;color:' + ddColor + ';margin-top:2px;">-' + dd.toFixed(1) + '%</div>' +
+            '<div style="font-size:8px;color:var(--t3);margin-top:1px;">' + (he?'ירידה מקס':'worst dip') + '</div>' +
+          '</div>';
+        }
+        const avgCard = pro.avgReturn != null ? '<div style="flex:1;min-width:90px;padding:10px;background:var(--bg);border-radius:8px;text-align:center;">' +
+            '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Avg Return</div>' +
+            '<div style="font-family:var(--mono);font-size:18px;font-weight:700;color:' + (pro.avgReturn>=0?'var(--green)':'var(--red)') + ';margin-top:2px;">' + (pro.avgReturn>=0?'+':'') + pro.avgReturn.toFixed(1) + '%</div>' +
+            '<div style="font-size:8px;color:var(--t3);margin-top:1px;">' + pro.paperTrades + ' ' + (he?'עסקאות':'trades') + '</div>' +
+          '</div>' : '';
+
+        return '<div style="padding:4px 16px 12px;">' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">' + (he?'📐 מדדים מקצועיים':'📐 Professional Metrics') + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + brierCard + sharpeCard + ddCard + avgCard + '</div>' +
+          (pro.paperTrades > 0 ? '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?'מבוסס על סימולציית paper-trade של תחזיות שוריות בביטחון >70%. לא ייעוץ השקעות.':'Based on paper-trade simulation of >70% confidence bullish forecasts. Not investment advice.') + '</div>' : '') +
+        '</div>';
+      })()}
 
       ${(()=>{
         // Confidence Calibration Chart — shows model honesty
