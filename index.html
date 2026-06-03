@@ -325,6 +325,14 @@ body.lang-he .fc-tf {
   </div>
 </div>
 
+<!-- MARKET CLOCK BAR -->
+<div id="marketClock" style="display:flex;align-items:center;justify-content:center;gap:10px;padding:6px 14px;background:var(--s1);border-bottom:1px solid var(--b1);font-family:var(--mono);font-size:11px;flex-wrap:wrap;">
+  <span id="mcDot" style="width:8px;height:8px;border-radius:50%;background:var(--t3);flex-shrink:0;"></span>
+  <span id="mcStatus" style="font-weight:700;color:var(--t2);">—</span>
+  <span id="mcCountdown" style="color:var(--t3);"></span>
+  <span id="mcSession" style="color:var(--t3);font-size:9px;opacity:.7;"></span>
+</div>
+
 <!-- DRAWER OVERLAY -->
 <div class="drawer-overlay" id="drawerOverlay" onclick="toggleDrawer()"></div>
 
@@ -1071,6 +1079,144 @@ function renderTopPick(winner, ai, runners, fgData) {
   '</div>';
 }
 
+// === US Market Clock (NYSE/NASDAQ hours in ET, with DST) ===
+function getMarketStatus() {
+  // Get current time in America/New_York (handles DST automatically)
+  const now = new Date();
+  const etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+  const et = new Date(etStr);
+
+  const day = et.getDay(); // 0=Sun, 6=Sat
+  const h = et.getHours();
+  const m = et.getMinutes();
+  const s = et.getSeconds();
+  const mins = h * 60 + m; // minutes since midnight ET
+  const isWeekend = (day === 0 || day === 6);
+
+  // Session boundaries (minutes from midnight ET)
+  const PRE_OPEN = 4 * 60;      // 4:00 AM
+  const MKT_OPEN = 9 * 60 + 30; // 9:30 AM
+  const MKT_CLOSE = 16 * 60;    // 4:00 PM
+  const AFTER_CLOSE = 20 * 60;  // 8:00 PM
+
+  // Helper: seconds until a target minute-of-day (today or next valid day)
+  const secsUntil = (targetMins, daysAhead = 0) => {
+    const cur = mins * 60 + s;
+    const tgt = targetMins * 60;
+    if (daysAhead === 0) return tgt - cur;
+    return (tgt - cur) + daysAhead * 86400;
+  };
+
+  // Days until next weekday (skip Sat/Sun)
+  const daysToNextOpen = () => {
+    if (day === 5) return 3;       // Fri → Mon
+    if (day === 6) return 2;       // Sat → Mon
+    if (day === 0) return 1;       // Sun → Mon
+    return 1;                       // Mon-Thu → next day
+  };
+
+  let state, label, countdownSecs, countdownLabel, session;
+
+  if (isWeekend) {
+    state = 'closed';
+    label = 'Market Closed';
+    session = 'Weekend';
+    const daysToMon = (day === 6) ? 2 : 1;
+    countdownSecs = secsUntil(PRE_OPEN, daysToMon);
+    countdownLabel = 'Pre-market opens in';
+  } else if (mins < PRE_OPEN) {
+    // Early morning before pre-market (midnight-4am)
+    state = 'closed';
+    label = 'Market Closed';
+    session = 'Opens 4:00 AM ET';
+    countdownSecs = secsUntil(PRE_OPEN, 0);
+    countdownLabel = 'Pre-market opens in';
+  } else if (mins < MKT_OPEN) {
+    // Pre-market 4:00-9:30
+    state = 'pre';
+    label = 'Pre-Market';
+    session = 'Regular opens 9:30 AM ET';
+    countdownSecs = secsUntil(MKT_OPEN, 0);
+    countdownLabel = 'Opens in';
+  } else if (mins < MKT_CLOSE) {
+    // Regular hours 9:30-16:00
+    state = 'open';
+    label = 'Market Open';
+    session = 'Closes 4:00 PM ET';
+    countdownSecs = secsUntil(MKT_CLOSE, 0);
+    countdownLabel = 'Closes in';
+  } else if (mins < AFTER_CLOSE) {
+    // After-hours 16:00-20:00
+    state = 'after';
+    label = 'After-Hours';
+    session = 'Ends 8:00 PM ET';
+    countdownSecs = secsUntil(AFTER_CLOSE, 0);
+    countdownLabel = 'After-hours ends in';
+  } else {
+    // After 20:00 — closed until next day's pre-market
+    state = 'closed';
+    label = 'Market Closed';
+    session = 'Pre-market 4:00 AM ET';
+    countdownSecs = secsUntil(PRE_OPEN, daysToNextOpen());
+    countdownLabel = 'Opens in';
+  }
+
+  return { state, label, countdownSecs, countdownLabel, session };
+}
+
+function fmtCountdown(secs) {
+  if (secs < 0) secs = 0;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  if (h >= 24) {
+    const d = Math.floor(h / 24);
+    const rh = h % 24;
+    return d + 'd ' + rh + 'h ' + m + 'm';
+  }
+  return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+
+function updateMarketClock() {
+  const st = getMarketStatus();
+  const dot = document.getElementById('mcDot');
+  const status = document.getElementById('mcStatus');
+  const countdown = document.getElementById('mcCountdown');
+  const session = document.getElementById('mcSession');
+  if (!dot || !status) return;
+
+  const colors = {
+    open:   'var(--green)',
+    pre:    'var(--yellow)',
+    after:  'var(--orange)',
+    closed: 'var(--red)',
+  };
+  const heLabels = {
+    'Market Open':   'הבורסה פתוחה',
+    'Pre-Market':    'טרום מסחר',
+    'After-Hours':   'מסחר מאוחר',
+    'Market Closed': 'הבורסה סגורה',
+  };
+  const heCountdown = {
+    'Closes in':              'נסגרת בעוד',
+    'Opens in':               'נפתחת בעוד',
+    'Pre-market opens in':    'טרום מסחר בעוד',
+    'After-hours ends in':    'מסחר מאוחר נגמר בעוד',
+  };
+
+  const he = (typeof langMode !== 'undefined' && langMode === 'he');
+  dot.style.background = colors[st.state] || 'var(--t3)';
+  dot.style.boxShadow = '0 0 6px ' + (colors[st.state] || 'transparent');
+  status.style.color = colors[st.state] || 'var(--t2)';
+  status.textContent = he ? (heLabels[st.label] || st.label) : st.label;
+  countdown.textContent = '· ' + (he ? (heCountdown[st.countdownLabel] || st.countdownLabel) : st.countdownLabel) + ' ' + fmtCountdown(st.countdownSecs);
+  session.textContent = '· ' + st.session;
+}
+
+// Start the clock — update every second
+updateMarketClock();
+setInterval(updateMarketClock, 1000);
+
 // === Quick Buy Decision ===
 async function quickDecision() {
   const input = document.getElementById('quickTicker');
@@ -1450,6 +1596,7 @@ function toggleLang() {
   localStorage.setItem('so_lang', langMode);
   document.body.classList.toggle('lang-he', langMode === 'he');
   translateLegend();
+  if (typeof updateMarketClock === 'function') updateMarketClock();
   // Note: Fixed UI labels update instantly. Claude text (reasoning etc.) 
   // updates on the next RUN — Hebrew is sent to Claude in the prompt.
   
