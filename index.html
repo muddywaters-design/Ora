@@ -719,6 +719,10 @@ async function showTopPick() {
   const oldResult = document.getElementById('topPickResult');
   if (oldResult) { oldResult.remove(); if (btn) { btn.textContent = '🏆 TOP PICK TODAY — All Signals Green'; btn.disabled = false; } return; }
 
+  // Raise cache TTL during the multi-stock scan to avoid rate limits.
+  // Restored to the fast default in the finally block below.
+  _activeCacheTTL = PRICE_CACHE_TTL_SCAN;
+
   // Show progress card
   const container = document.getElementById('analyzeContent');
   const progress = document.createElement('div');
@@ -930,6 +934,7 @@ async function showTopPick() {
     if (isRate) { window._rateLimitUntil = Date.now() + 60000; updateRateLimitBadge(); }
     progress.innerHTML = '<div style="padding:16px;color:var(--' + (isRate ? 'yellow' : 'red') + ');font-size:12px;background:var(--s1);border-radius:10px;">⚠️ ' + errMsg + '</div>';
   } finally {
+    _activeCacheTTL = PRICE_CACHE_TTL; // restore fast 20s default after scan
     if (btn) { btn.textContent = '🏆 TOP PICK TODAY — All Signals Green'; btn.disabled = false; }
   }
 }
@@ -2894,7 +2899,7 @@ async function fetchYahooData(ticker) {
 async function fetchLivePrice(ticker) {
   const cacheKey = ticker.toUpperCase();
   // Check cache first
-  if (priceCache[cacheKey] && (Date.now() - priceCache[cacheKey].timestamp) < PRICE_CACHE_TTL) {
+  if (priceCache[cacheKey] && (Date.now() - priceCache[cacheKey].timestamp) < _activeCacheTTL) {
     return priceCache[cacheKey].data;
   }
 
@@ -6011,7 +6016,11 @@ function getCalibrationFactor(timeframe) {
 
 // Price cache — avoids redundant API calls within 90 seconds
 const priceCache = {};
-const PRICE_CACHE_TTL = 90000; // 90 seconds
+// Context-aware cache: short by default for freshness, longer only for bulk scans.
+// You don't need to manage this — it adapts automatically.
+const PRICE_CACHE_TTL = 20000;        // 20s default — near-real-time for single analysis
+const PRICE_CACHE_TTL_SCAN = 60000;   // 60s during multi-stock scans (avoids rate limits)
+let _activeCacheTTL = PRICE_CACHE_TTL; // current TTL (raised temporarily during Top Pick scan)
 
 let portfolios = (() => {
   try { return JSON.parse(localStorage.getItem('so_portfolios')) || []; } catch(_) { return []; }
