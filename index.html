@@ -796,6 +796,19 @@ async function showTopPick() {
     // STEP 3: Score each stock on 7 convergence signals
     setStep(3, 'Scoring ' + stocks.length + ' stocks on 7 signals…');
 
+    // Detect market regime from macro data to adjust weights (#7)
+    const regime = fgData && fgData.score != null
+      ? (fgData.score < 30 ? 'fear' : fgData.score > 70 ? 'greed' : 'neutral')
+      : 'neutral';
+
+    // Regime-aware signal weights. In fear markets, momentum/volume matter more
+    // (oversold bounces); in greed, analyst fundamentals get more weight.
+    const W = regime === 'fear'
+      ? { wsb: 1.0, rsi: 1.3, vol: 1.2, macd: 1.1, sector: 0.8, analyst: 0.7, mood: 1.2, mom: 1.3 }
+      : regime === 'greed'
+      ? { wsb: 0.8, rsi: 1.0, vol: 0.9, macd: 1.0, sector: 1.2, analyst: 1.3, mood: 0.8, mom: 1.0 }
+      : { wsb: 1.0, rsi: 1.0, vol: 1.0, macd: 1.0, sector: 1.0, analyst: 1.0, mood: 1.0, mom: 1.0 };
+
     const scored = stocks.map(({ wsb, live }) => {
       const signals = [];
       const rsi = parseFloat(live.rsi) || null;
@@ -805,77 +818,72 @@ async function showTopPick() {
       const sectorRel = parseFloat(live.sectorRelative) || null;
       const beta = parseFloat(live.beta) || 1;
       const weekPos = parseFloat(live.weekPos52) || null;
+      const targetP = parseFloat(live.targetPrice) || null;
+      const price = parseFloat(live.price);
       const mentions = parseInt(wsb.mentions) || 0;
       const mentions24h = parseInt(wsb.mentions_24h_ago) || mentions;
       const mentionGrowth = mentions24h > 0 ? ((mentions - mentions24h) / mentions24h) * 100 : 0;
       const rank = parseInt(wsb.rank);
       const rank24h = parseInt(wsb.rank_24h_ago) || rank;
-      const rising = rank24h > rank + 3; // rising in WSB rankings
-
-      // Price crash filter — a stock down >15% today is NOT a buy signal
+      const rising = rank24h > rank + 3;
       const todayChange = parseFloat(live.changePct) || 0;
       const crashed = todayChange < -15;
-      const surged = todayChange > 20; // also risky — may be too late / pump
+      const surged = todayChange > 20;
+      const fg = fgData?.score ?? null;
 
-      // 1. WSB Signal (real - ApeWisdom)
-      // But if stock crashed today, WSB buzz is likely panic, not bullish
-      const wsb_bull = mentions >= 100 && (mentionGrowth > 20 || rising) && !crashed;
-      signals.push({ name: 'WSB Buzz', bull: wsb_bull, real: true,
-        detail: mentions + ' mentions' + (mentionGrowth > 0 ? ' +' + Math.round(mentionGrowth) + '%' : ''),
-        icon: '🚀' });
+      // === Continuous scores (0.0-1.0) instead of binary (#4) ===
+      const sc = {
+        wsb:     scoreWSB(mentions, mentionGrowth, rising, crashed),
+        rsi:     scoreRSI(rsi),
+        vol:     scoreVolume(volRatio),
+        macd:    scoreMACD(macd, macdSig),
+        sector:  scoreSector(sectorRel),
+        analyst: scoreAnalyst(targetP, price),
+        mood:    scoreMood(fg),
+        mom:     scoreMomentum(todayChange),
+      };
 
-      // 2. RSI signal (real - Yahoo)
-      const rsi_bull = rsi !== null && rsi >= 45 && rsi <= 68;
-      signals.push({ name: 'RSI', bull: rsi_bull, real: rsi !== null,
-        detail: rsi !== null ? rsi.toFixed(0) + (rsi < 40 ? ' oversold' : rsi > 70 ? ' overbought' : ' healthy') : 'N/A',
-        icon: '📊' });
+      // Build signal display objects (a signal is "bullish" if score >= 0.55)
+      const mkSig = (name, icon, score, detail, real) => ({
+        name, icon, real,
+        score: score,
+        bull: score != null && score >= 0.55,
+        detail,
+      });
 
-      // 3. Volume signal (real - Yahoo)
-      const vol_bull = volRatio !== null && volRatio >= 1.5;
-      signals.push({ name: 'Volume', bull: vol_bull, real: volRatio !== null,
-        detail: volRatio !== null ? volRatio.toFixed(1) + 'x avg' : 'N/A',
-        icon: '📈' });
+      signals.push(mkSig('WSB Buzz', '🚀', sc.wsb,
+        mentions + ' mentions' + (mentionGrowth > 0 ? ' +' + Math.round(mentionGrowth) + '%' : '') + (crashed ? ' ⚠️crash' : ''), true));
+      signals.push(mkSig('RSI', '📊', sc.rsi,
+        rsi != null ? rsi.toFixed(0) + (rsi < 35 ? ' oversold' : rsi > 70 ? ' overbought' : ' healthy') : 'N/A', rsi != null));
+      signals.push(mkSig('Volume', '📈', sc.vol,
+        volRatio != null ? volRatio.toFixed(1) + 'x avg' : 'N/A', volRatio != null));
+      signals.push(mkSig('MACD', '⚡', sc.macd,
+        macd != null ? (macd > macdSig ? 'Bullish' : 'Bearish') + ' (' + (macd - macdSig).toFixed(2) + ')' : 'N/A', macd != null));
+      signals.push(mkSig('Sector RS', '🏭', sc.sector,
+        sectorRel != null ? (sectorRel >= 0 ? '+' : '') + sectorRel.toFixed(1) + '% vs sector' : 'N/A', sectorRel != null));
+      signals.push(mkSig('Analysts', '🎯', sc.analyst,
+        targetP != null ? 'Target $' + targetP.toFixed(2) + ' (' + (((targetP/price)-1)*100).toFixed(0) + '%)' : 'N/A', targetP != null));
+      signals.push(mkSig('Market Mood', '🌡️', sc.mood,
+        fg != null ? fgData.rating + ' (' + fg + ')' : 'N/A', fg != null));
+      signals.push(mkSig('Day Momentum', '📉', sc.mom,
+        (todayChange >= 0 ? '+' : '') + todayChange.toFixed(1) + '% today' + (crashed ? ' ⚠️' : surged ? ' ⚠️spike' : ''), true));
 
-      // 4. MACD signal (real - Yahoo)
-      const macd_bull = macd !== null && macdSig !== null && macd > macdSig;
-      signals.push({ name: 'MACD', bull: macd_bull, real: macd !== null,
-        detail: macd !== null ? (macd > macdSig ? 'Bullish cross' : 'Bearish') : 'N/A',
-        icon: '⚡' });
-
-      // 5. Sector Relative Strength (real - Yahoo)
-      const sector_bull = sectorRel !== null && sectorRel > 3;
-      signals.push({ name: 'Sector RS', bull: sector_bull, real: sectorRel !== null,
-        detail: sectorRel !== null ? (sectorRel >= 0 ? '+' : '') + sectorRel.toFixed(1) + '% vs sector' : 'N/A',
-        icon: '🏭' });
-
-      // 6. Analyst consensus (real - Yahoo targetPrice/numAnalysts)
-      const targetP = parseFloat(live.targetPrice) || null;
-      const price = parseFloat(live.price);
-      const analyst_bull = targetP !== null && targetP > price * 1.1; // target 10%+ above
-      signals.push({ name: 'Analysts', bull: analyst_bull, real: targetP !== null,
-        detail: targetP !== null ? 'Target $' + targetP.toFixed(2) + ' (' + (((targetP/price)-1)*100).toFixed(0) + '% upside)' : 'N/A',
-        icon: '🎯' });
-
-      // 7. Macro / Market mood (real - Fear & Greed)
-      const fg = fgData?.score || 50;
-      // Neutral/mild fear = good for buying. Extreme greed = bad. Extreme fear = risky.
-      const macro_bull = fg >= 25 && fg <= 65;
-      signals.push({ name: 'Market Mood', bull: macro_bull, real: !!fgData,
-        detail: fgData ? fgData.rating + ' (' + fg + ')' : 'N/A',
-        icon: '🌡️' });
-
-      // 8th check: Today's momentum (penalize crashes heavily)
-      const momentum_bull = todayChange >= -3 && todayChange <= 15; // stable to mild up
-      signals.push({ name: 'Day Momentum', bull: momentum_bull, real: true,
-        detail: (todayChange >= 0 ? '+' : '') + todayChange.toFixed(1) + '% today' + (crashed ? ' ⚠️ crashed' : surged ? ' ⚠️ spiked' : ''),
-        icon: '📉' });
-
+      // === Weighted continuous score (regime-adjusted) ===
+      const wMap = { 'WSB Buzz':W.wsb, 'RSI':W.rsi, 'Volume':W.vol, 'MACD':W.macd, 'Sector RS':W.sector, 'Analysts':W.analyst, 'Market Mood':W.mood, 'Day Momentum':W.mom };
+      let weightedSum = 0, weightTotal = 0;
+      signals.forEach(s => {
+        if (s.score != null) {
+          const w = wMap[s.name] || 1;
+          weightedSum += s.score * w;
+          weightTotal += w;
+        }
+      });
+      const compositeScore = weightTotal > 0 ? weightedSum / weightTotal : 0; // 0.0-1.0
       const bullCount = signals.filter(s => s.bull).length;
       const realSignals = signals.filter(s => s.real).length;
-      const convergenceScore = realSignals > 0 ? (bullCount / 8) * 100 : 0;
 
-      // Hard penalty: if crashed today, cap the appeal
-      const crashPenalty = crashed ? -3 : 0;
+      // Crash penalty on composite
+      const adjScore = crashed ? compositeScore * 0.5 : compositeScore;
 
       return {
         ticker: wsb.ticker,
@@ -883,37 +891,33 @@ async function showTopPick() {
         price: live.price,
         changePct: live.changePct,
         signals,
-        bullCount: Math.max(0, bullCount + crashPenalty),
-        rawBullCount: bullCount,
-        convergenceScore,
+        bullCount,
+        compositeScore: adjScore,
+        convergenceScore: Math.round(adjScore * 100),
         crashed,
         surged,
         todayChange,
         beta,
         mentions,
+        regime,
         marketCap: live.marketCap,
         nextEarnings: live.nextEarnings,
       };
     });
 
-    // Sort by bull signal count, then by convergence score
-    scored.sort((a, b) => b.bullCount - a.bullCount || b.convergenceScore - a.convergenceScore);
+    scored.sort((a, b) => b.compositeScore - a.compositeScore);
     const winner = scored[0];
 
     if (!winner) {
       throw new Error('No candidates found — check your connection and try again.');
     }
-    // HONEST THRESHOLD: A real "Top Pick" needs strong convergence
-    // If best stock has <4 bullish signals, there is NO good pick today
+    // HONEST THRESHOLD using composite continuous score (#4)
+    // A genuine "Top Pick" needs composite >= 0.58 (strong multi-signal alignment)
     const realCount = winner.signals.filter(s => s.real).length;
+    const MIN_COMPOSITE = 0.58;
+    const strongEnough = winner.compositeScore >= MIN_COMPOSITE && winner.bullCount >= 4;
 
-    // Hard rule: need at least 4 bullish signals for a genuine "Top Pick"
-    // AND at least 50% of available signals must be bullish
-    const MIN_BULLISH_FOR_PICK = 4;
-    const enoughSignals = winner.bullCount >= MIN_BULLISH_FOR_PICK;
-    const goodRatio = realCount > 0 && (winner.bullCount / realCount) >= 0.5;
-
-    if (!enoughSignals || !goodRatio) {
+    if (!strongEnough) {
       // NO genuine Top Pick today — be honest, don't pretend
       renderNoStrongPick(winner, scored.slice(0, 4), fgData);
       return;
@@ -1038,7 +1042,7 @@ function renderTopPick(winner, ai, runners, fgData) {
       // Header
       '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;">' +
         '<div>' +
-          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;">🏆 Today\'s Top Pick</div>' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;">🏆 Today\'s Top Pick' + (winner.regime && winner.regime !== 'neutral' ? ' · <span style="color:' + (winner.regime==="fear"?"var(--red)":"var(--green)") + ';">' + winner.regime.toUpperCase() + ' regime</span>' : '') + '</div>' +
           '<div style="font-family:var(--mono);font-size:28px;font-weight:700;color:var(--green);">' + winner.ticker + '</div>' +
           '<div style="font-size:11px;color:var(--t2);">' + winner.company + '</div>' +
           '<div style="font-family:var(--mono);font-size:12px;color:var(--t1);margin-top:2px;">$' + winner.price + ' <span style="color:' + (parseFloat(winner.changePct||0) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + (parseFloat(winner.changePct||0) >= 0 ? '+' : '') + parseFloat(winner.changePct||0).toFixed(2) + '%</span></div>' +
@@ -1061,7 +1065,7 @@ function renderTopPick(winner, ai, runners, fgData) {
       '</div>' +
 
       // AI Verdict
-      (ai?.verdict ? '<div style="font-size:12px;color:var(--t1);line-height:1.6;margin-bottom:10px;padding:10px;background:rgba(255,255,255,.03);border-radius:8px;border-left:3px solid ' + barColor + ';">' + ai.verdict + '</div>' : '') +
+      (ai?.verdict ? '<div style="font-size:9px;color:var(--t3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">' + (langMode==="he"?"🧠 סיכום AI":"🧠 AI Summary") + '</div><div style="font-size:12px;color:var(--t1);line-height:1.6;margin-bottom:10px;padding:10px;background:rgba(255,255,255,.03);border-radius:8px;border-left:3px solid ' + barColor + ';">' + ai.verdict + '</div>' : '') +
 
       // Entry/Stop/Target
       (ai?.entry || ai?.stop || ai?.target_1m ? '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px;">' +
@@ -1084,6 +1088,88 @@ function renderTopPick(winner, ai, runners, fgData) {
 
     '</div>' +
   '</div>';
+}
+
+// === Continuous Signal Scoring (smooth, not binary) ===
+// Each signal returns 0.0-1.0 instead of true/false, eliminating artificial
+// cliff effects (e.g. RSI 44 vs 45). Based on improvement suggestion #4.
+
+// Smooth bell curve — peaks at `ideal`, falls off over `width`
+function bellScore(value, ideal, width) {
+  if (value == null || isNaN(value)) return null;
+  const diff = Math.abs(value - ideal);
+  return Math.max(0, Math.exp(-(diff * diff) / (2 * width * width)));
+}
+
+// Smooth ramp — 0 below `low`, 1 above `high`, linear between
+function rampScore(value, low, high) {
+  if (value == null || isNaN(value)) return null;
+  if (value <= low) return 0;
+  if (value >= high) return 1;
+  return (value - low) / (high - low);
+}
+
+// RSI: healthy momentum peaks ~58, falls off toward oversold(30)/overbought(75)
+function scoreRSI(rsi) {
+  if (rsi == null) return null;
+  // Reward 50-65 zone, penalize extremes smoothly
+  if (rsi < 30) return 0.15;           // deeply oversold — risky
+  if (rsi > 78) return 0.10;           // very overbought — late
+  return bellScore(rsi, 58, 14);       // smooth peak at healthy momentum
+}
+
+// Volume ratio: more is better, but smooth (no 1.5x cliff)
+function scoreVolume(vr) {
+  if (vr == null) return null;
+  return rampScore(vr, 0.8, 3.0);      // ramps from 0.8x to 3x
+}
+
+// MACD: how far above signal line (momentum strength), smooth
+function scoreMACD(macd, sig) {
+  if (macd == null || sig == null) return null;
+  const diff = macd - sig;
+  // Smooth: bullish cross strength, not just yes/no
+  return rampScore(diff, -0.5, 1.0);
+}
+
+// Sector relative strength: outperformance, smooth
+function scoreSector(rel) {
+  if (rel == null) return null;
+  return rampScore(rel, -5, 8);        // -5% to +8% vs sector
+}
+
+// Analyst upside: target vs price, smooth
+function scoreAnalyst(target, price) {
+  if (target == null || !price) return null;
+  const upside = ((target / price) - 1) * 100;
+  return rampScore(upside, -5, 25);    // -5% to +25% upside
+}
+
+// WSB momentum: mention growth, smooth (capped to avoid pump distortion)
+function scoreWSB(mentions, growth, rising, crashed) {
+  if (mentions < 50) return 0.2;       // too little buzz
+  if (crashed) return 0.15;            // buzz during crash = panic
+  // Combine volume of mentions + growth, smooth
+  const volScore = rampScore(mentions, 50, 500);
+  const growthScore = rampScore(growth, -20, 80);
+  let s = 0.4 * volScore + 0.6 * growthScore;
+  if (rising) s = Math.min(1, s + 0.1);
+  return s;
+}
+
+// Market mood (F&G): contrarian — moderate fear is best entry
+function scoreMood(fg) {
+  if (fg == null) return null;
+  // Peak around 35-45 (mild fear = opportunity), low at extremes
+  return bellScore(fg, 40, 22);
+}
+
+// Day momentum: stable-to-mild-up is best, crash/spike penalized
+function scoreMomentum(change) {
+  if (change == null) return 0.5;
+  if (change < -15) return 0.05;       // crashed
+  if (change > 20) return 0.25;        // spiked — may be too late
+  return bellScore(change, 3, 9);      // peak at mild positive
 }
 
 // === US Market Clock (NYSE/NASDAQ hours in ET, with DST) ===
@@ -1383,6 +1469,7 @@ function renderQuickDecision(ticker, liveData, decision) {
       </div>
     </div>
 
+    <div style="font-size:9px;color:var(--t3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${langMode==='he'?'🧠 סיכום AI':'🧠 AI Summary'}</div>
     <div style="font-size:12px;color:var(--t1);line-height:1.55;margin-bottom:10px;">${decision.reasoning || ''}</div>
 
     ${decision.entry_price || decision.stop_loss || decision.target_1m ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;">
