@@ -2181,6 +2181,11 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
       if (smaD && smaD.dist200 != null) {
         parts.push((smaD.dist200 >= 0 ? '+' : '') + smaD.dist200.toFixed(1) + '%vs200SMA');
       }
+      // Last 7 daily closes for immediate context (compact — not the full array, #2)
+      const recent = closes.slice(-7);
+      if (recent.length >= 3) {
+        parts.push('Last' + recent.length + 'closes:[' + recent.map(v => v.toFixed(2)).join(',') + ']');
+      }
       return parts.length ? parts.join(',') + '.' : '';
     } catch(_) { return ''; }
   })();
@@ -4535,7 +4540,11 @@ function computeProMetrics(results) {
     // No risk-free rate subtraction (short horizons); this is a relative volatility-adjusted score.
     const variance = returns.reduce((a,b)=>a+(b-avg)**2,0) / returns.length;
     const std = Math.sqrt(variance);
-    m.sharpe = std > 0 ? avg / std : null;
+    const rawSharpe = std > 0 ? avg / std : null;
+    // Annualize: paper trades evaluate ~weekly horizons, so scale by sqrt(52)
+    // so the figure is comparable to real-world annual Sharpe benchmarks (#1).
+    m.sharpePeriod = 52; // weekly frequency
+    m.sharpe = rawSharpe != null ? rawSharpe * Math.sqrt(m.sharpePeriod) : null;
 
     // Max Drawdown: largest peak-to-trough decline of a cumulative equity curve
     // built by compounding the paper-trade returns in sequence.
@@ -4626,8 +4635,11 @@ function renderAccDashboard(results) {
         let brierCard = '';
         if (pro.brier != null) {
           const b = pro.brier;
-          const bColor = b <= 0.15 ? 'var(--green)' : b <= 0.25 ? 'var(--yellow)' : 'var(--red)';
-          const bLabel = b <= 0.15 ? (he?'מכויל היטב':'Well calibrated') : b <= 0.25 ? (he?'סביר':'Fair') : (he?'לא מכויל':'Poorly calibrated');
+          // Thresholds per spec (#3): <=0.20 Excellent, <=0.30 Good, >0.30 Overconfident
+          const bColor = b <= 0.20 ? 'var(--green)' : b <= 0.30 ? 'var(--blue)' : 'var(--red)';
+          const bLabel = b <= 0.20 ? (he?'כיול מצוין':'Excellent Calibration')
+                       : b <= 0.30 ? (he?'כיול טוב':'Good Calibration')
+                       : (he?'ביטחון יתר / לא מכויל':'Overconfident / Miscalibrated');
           brierCard = '<div style="flex:1;min-width:90px;padding:10px;background:var(--bg);border-radius:8px;text-align:center;">' +
             '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Brier Score</div>' +
             '<div style="font-family:var(--mono);font-size:18px;font-weight:700;color:' + bColor + ';margin-top:2px;">' + b.toFixed(3) + '</div>' +
@@ -4639,9 +4651,10 @@ function renderAccDashboard(results) {
         let sharpeCard = '', ddCard = '';
         if (pro.sharpe != null) {
           const s = pro.sharpe;
-          const sColor = s >= 1 ? 'var(--green)' : s >= 0 ? 'var(--yellow)' : 'var(--red)';
+          // Annualized Sharpe benchmarks: >2 excellent, >1 good, >0 ok, <0 poor
+          const sColor = s >= 2 ? 'var(--green)' : s >= 1 ? '#2dd4bf' : s >= 0 ? 'var(--yellow)' : 'var(--red)';
           sharpeCard = '<div style="flex:1;min-width:90px;padding:10px;background:var(--bg);border-radius:8px;text-align:center;">' +
-            '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Sharpe</div>' +
+            '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">Sharpe ' + (he?'(שנתי)':'(ann.)') + '</div>' +
             '<div style="font-family:var(--mono);font-size:18px;font-weight:700;color:' + sColor + ';margin-top:2px;">' + s.toFixed(2) + '</div>' +
             '<div style="font-size:8px;color:var(--t3);margin-top:1px;">' + (he?'תשואה/סיכון':'risk-adj.') + '</div>' +
           '</div>';
@@ -4664,7 +4677,7 @@ function renderAccDashboard(results) {
         return '<div style="padding:4px 16px 12px;">' +
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">' + (he?'📐 מדדים מקצועיים':'📐 Professional Metrics') + '</div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + brierCard + sharpeCard + ddCard + avgCard + '</div>' +
-          (pro.paperTrades > 0 ? '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?'מבוסס על סימולציית paper-trade של תחזיות שוריות בביטחון >70%. לא ייעוץ השקעות.':'Based on paper-trade simulation of >70% confidence bullish forecasts. Not investment advice.') + '</div>' : '') +
+          (pro.paperTrades > 0 ? '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?'מבוסס על סימולציית paper-trade של תחזיות שוריות בביטחון >70%. Sharpe שנתי (×√52). לא ייעוץ השקעות.':'Based on paper-trade simulation of >70% confidence bullish forecasts. Sharpe is annualized (×√52). Not investment advice.') + '</div>' : '') +
         '</div>';
       })()}
 
