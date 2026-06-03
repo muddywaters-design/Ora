@@ -1580,7 +1580,7 @@ async function apiCall(messages, useSearch, maxTokens) {
   const body = {
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 4000,
-    system: 'You are StockOracle, a quant analyst. JSON only. Steps: (1)Search news. (2)Analyze technicals+macro. (3)Counter-argue why wrong. (4)For each timeframe give prob_up+prob_flat+prob_down=100. Direction=highest prob. Confidence>70% only if 4+ signals agree. Wide ranges. Include bull/bear cases.',
+    system: 'You are StockOracle, a quant analyst. First, think through your analysis inside <analysis_scratchpad>...</analysis_scratchpad> tags: weigh the bull vs bear case, note which signals agree/conflict, and flag the biggest risk. Keep the scratchpad concise (4-8 short lines). THEN output the JSON payload (and nothing else after it). Steps: (1)Search news if enabled. (2)Analyze technicals+macro+fundamentals. (3)Counter-argue why you might be wrong. (4)For each timeframe give prob_up+prob_flat+prob_down=100. Direction=highest prob. Confidence>70% only if 4+ signals agree. Wide ranges. Include bull/bear cases. The JSON must be valid and complete.',
     messages,
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -1655,8 +1655,14 @@ async function toJSONEnsemble(prompt, useSearch) {
   const results = await Promise.allSettled(calls);
 
   const parsed = [];
+  let scratchpad = null;
   for (const r of results) {
     if (r.status === 'fulfilled') {
+      // Capture the first scratchpad we find (from the primary/technical call)
+      if (!scratchpad) {
+        const sp = extractScratchpad(r.value);
+        if (sp) scratchpad = sp;
+      }
       try { parsed.push(extractJSON(r.value)); } catch(_) {}
     }
   }
@@ -1666,7 +1672,10 @@ async function toJSONEnsemble(prompt, useSearch) {
     const errMsg = firstErr?.reason?.message || 'API call failed';
     throw new Error(errMsg);
   }
-  if (parsed.length === 1) return JSON.stringify(parsed[0]);
+  if (parsed.length === 1) {
+    if (scratchpad) parsed[0]._scratchpad = scratchpad;
+    return JSON.stringify(parsed[0]);
+  }
 
   // Use first result as base, average confidence scores and directions
   const base = JSON.parse(JSON.stringify(parsed[0]));
@@ -1699,12 +1708,41 @@ async function toJSONEnsemble(prompt, useSearch) {
 
   base._ensemble = true;
   base._ensemble_models = 2;
+  if (scratchpad) base._scratchpad = scratchpad;
   return JSON.stringify(base);
+}
+
+// Extract <analysis_scratchpad> reasoning block (if present) for the Thinking UI.
+// Robust: returns null if no scratchpad found — never throws, never blocks JSON parsing.
+function extractScratchpad(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  // Match content between <analysis_scratchpad> tags (case-insensitive, multiline)
+  const m = raw.match(/<analysis_scratchpad>([\s\S]*?)<\/analysis_scratchpad>/i);
+  if (m && m[1]) {
+    const text = m[1].trim();
+    return text.length > 0 ? text : null;
+  }
+  // Fallback: some models may use a header style instead of tags
+  const altMatch = raw.match(/(?:^|\n)\s*(?:ANALYSIS SCRATCHPAD|SCRATCHPAD|REASONING)[:\s]*\n([\s\S]*?)(?=\n\s*\{)/i);
+  if (altMatch && altMatch[1] && altMatch[1].trim().length > 20) {
+    return altMatch[1].trim();
+  }
+  return null;
 }
 
 function extractJSON(raw) {
   if (!raw || !raw.trim()) throw new Error('Empty response from API');
-  const text = raw.replace(/```(?:json)?/gi, '').trim();
+
+  // Extract <analysis_scratchpad> thinking block if present (chain-of-thought).
+  // Stored globally so the UI can display the model's reasoning. Fully optional.
+  let scratchpad = null;
+  const scratchMatch = raw.match(/<analysis_scratchpad>([\s\S]*?)<\/analysis_scratchpad>/i);
+  if (scratchMatch) scratchpad = scratchMatch[1].trim();
+  window._lastScratchpad = scratchpad;
+
+  // Remove scratchpad block before JSON parsing so its braces don't confuse the parser
+  let text = raw.replace(/<analysis_scratchpad>[\s\S]*?<\/analysis_scratchpad>/gi, '');
+  text = text.replace(/```(?:json)?/gi, '').trim();
   let depth = 0, start = -1, end = -1;
   for (let i = 0; i < text.length; i++) {
     if (text[i] === '{') { if (!depth) start = i; depth++; }
@@ -3365,6 +3403,8 @@ async function runAnalysis(sym) {
     clearInterval(window._elapsedInterval);
     window.currentTicker = t;
     window.currentParsed = parsed;
+    parsed._scratchpad = window._lastScratchpad || null;
+    parsed._macroData = macroData;
     parsed._fhNews = fhNews;
     parsed._fhAnalysts = fhAnalysts;
     parsed._fhInsider = fhInsider;
@@ -3510,8 +3550,24 @@ function renderAnalysis(ticker, d) {
 
   const srcHTML = srcs.map((s,i) => `<span class="src-tag ${i<10?'on':''}">${s}</span>`).join('');
 
+  // Thinking process panel (only if model provided a scratchpad)
+  const scratchpadHTML = d._scratchpad ? `
+    <div style="margin-bottom:14px;">
+      <button onclick="(function(b){var p=document.getElementById('scratchpadBody');var open=p.style.display!=='none';p.style.display=open?'none':'block';b.querySelector('.sp-arrow').textContent=open?'▸':'▾';})(this)"
+        style="width:100%;background:var(--s2);border:1px solid var(--b1);border-radius:10px 10px 0 0;padding:11px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--t1);transition:all .15s;">
+        <span style="display:flex;align-items:center;gap:7px;">
+          <span style="font-size:13px;">🧠</span>
+          <span style="font-weight:700;">${langMode==='he'?'אנליזת עומק ולוח טיוטה':'Deep Analysis — AI Scratchpad'}</span>
+          <span style="font-size:9px;background:var(--purple);color:var(--bg);padding:1px 6px;border-radius:3px;">CHAIN OF THOUGHT</span>
+        </span>
+        <span class="sp-arrow" style="color:var(--t3);font-size:12px;">▾</span>
+      </button>
+      <div id="scratchpadBody" style="display:block;background:var(--bg);border:1px solid var(--b1);border-top:none;border-radius:0 0 10px 10px;padding:14px;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--t2);white-space:pre-wrap;unicode-bidi:plaintext;max-height:300px;overflow-y:auto;">${d._scratchpad.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+    </div>` : '';
+
   document.getElementById('analyzeContent').innerHTML = `
   <div class="panel">
+    ${scratchpadHTML}
     <div class="sh">
       <div class="sh-top">
         <div>
@@ -3815,6 +3871,41 @@ function renderAnalysis(ticker, d) {
           '<div style="display:flex;align-items:center;justify-content:space-between;">' +
             '<span style="font-family:var(--mono);font-size:16px;font-weight:700;color:' + sigColor + ';">' + ins.signal + '</span>' +
             '<span style="font-size:11px;color:var(--t3);">' + ins.buys + ' buys · ' + ins.sells + ' sells (90d)</span>' +
+          '</div>' +
+        '</div></div>';
+    })()}
+
+    ${(()=>{
+      // Macro Regime card (real VIX/TNX/DXY data)
+      const m = d._macroData;
+      if (!m || (!m.vix && !m.tnx && !m.dxy)) return '';
+      const regimeColor = m.regime === 'risk-off' ? 'var(--red)' : m.regime === 'risk-on' ? 'var(--green)' : 'var(--yellow)';
+      const regimeLabel = langMode==='he' 
+        ? (m.regime==='risk-off'?'הימנעות מסיכון':m.regime==='risk-on'?'נטילת סיכון':'נייטרלי')
+        : m.regime;
+      const metric = (label, val, suffix, interpret) => {
+        if (val == null) return '';
+        return '<div style="padding:8px;background:var(--bg);border-radius:7px;text-align:center;">' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);">' + label + '</div>' +
+          '<div style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--t1);margin-top:2px;">' + val.toFixed(suffix) + '</div>' +
+          (interpret ? '<div style="font-size:8px;color:' + interpret.color + ';margin-top:1px;">' + interpret.text + '</div>' : '') +
+        '</div>';
+      };
+      const vixI = m.vix ? (m.vix > 30 ? {text:langMode==='he'?'פחד':'fear',color:'var(--red)'} : m.vix > 20 ? {text:langMode==='he'?'מוגבר':'elevated',color:'var(--yellow)'} : m.vix < 15 ? {text:langMode==='he'?'רגוע':'calm',color:'var(--green)'} : {text:'normal',color:'var(--t3)'}) : null;
+      const tnxI = m.tnx ? (m.tnx > 4.5 ? {text:langMode==='he'?'תשואה גבוהה':'high yield',color:'var(--red)'} : m.tnx < 3.5 ? {text:langMode==='he'?'תשואה נמוכה':'low yield',color:'var(--green)'} : {text:'moderate',color:'var(--t3)'}) : null;
+      const dxyI = m.dxy ? (m.dxy > 106 ? {text:langMode==='he'?'דולר חזק':'strong $',color:'var(--yellow)'} : m.dxy < 100 ? {text:langMode==='he'?'דולר חלש':'weak $',color:'var(--green)'} : {text:'stable',color:'var(--t3)'}) : null;
+      const spyI = m.spy5d != null ? {text:(m.spy5d>=0?'+':'')+m.spy5d.toFixed(1)+'% 5d',color:m.spy5d>=0?'var(--green)':'var(--red)'} : null;
+      return '<div class="card"><div class="ch">🌡️ ' + (langMode==='he'?'משטר מאקרו':'Macro Regime') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
+        '<div class="cb">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
+            '<span style="font-size:11px;color:var(--t3);">' + (langMode==='he'?'סביבת שוק כללית':'Overall market environment') + '</span>' +
+            '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + regimeColor + ';text-transform:uppercase;">' + regimeLabel + '</span>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;">' +
+            metric('VIX', m.vix, 1, vixI) +
+            metric('10Y', m.tnx, 2, tnxI) +
+            metric('DXY', m.dxy, 1, dxyI) +
+            (spyI ? '<div style="padding:8px;background:var(--bg);border-radius:7px;text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">SPY</div><div style="font-family:var(--mono);font-size:14px;font-weight:700;color:' + spyI.color + ';margin-top:2px;">' + (m.spy5d>=0?'+':'') + m.spy5d.toFixed(1) + '%</div><div style="font-size:8px;color:var(--t3);margin-top:1px;">5 day</div></div>' : '') +
           '</div>' +
         '</div></div>';
     })()}
