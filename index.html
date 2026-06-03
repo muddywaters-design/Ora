@@ -763,7 +763,7 @@ async function showTopPick() {
 
     // STEP 1: Get WSB trending pool
     setStep(1, 'Fetching real WSB trending data…');
-    const wsbPool = await fetchApeWisdom();
+    const wsbPool = await withTimeout(fetchApeWisdom(), 12000);
     if (!wsbPool || wsbPool.length === 0) throw new Error('WSB data unavailable — try again');
     const candidates = wsbPool.slice(0, 15); // top 15 trending (batched to avoid rate limits)
 
@@ -778,7 +778,7 @@ async function showTopPick() {
       const batch = candidates.slice(i, i + batchSize);
       setStep(2, 'Fetching data ' + Math.min(i + batchSize, candidates.length) + '/' + candidates.length + '…');
       const batchResults = await Promise.allSettled(
-        batch.map(t => fetchLivePrice(t.ticker).then(live => ({ wsb: t, live })))
+        batch.map(t => withTimeout(fetchLivePrice(t.ticker), 10000).then(live => ({ wsb: t, live })))
       );
       marketResults.push(...batchResults);
       // Small delay between batches (except last)
@@ -930,10 +930,17 @@ async function showTopPick() {
       (langMode === 'he' ? ' Answer in Hebrew.' : '') +
       ' JSON only: {"verdict":"2-3 sentences","entry":"$X","stop":"$X","target_1m":"$X","risk":"1 sentence","is_golden":true/false}';
 
-    const raw = await toJSON(prompt, false);
-    const ai = extractJSON(raw);
+    let ai = {};
+    try {
+      const raw = await withTimeout(toJSON(prompt, false), 30000);
+      if (raw) ai = extractJSON(raw);
+    } catch(verdictErr) {
+      // AI verdict failed/timed out — still show the winner with its real signals
+      console.warn('Top Pick verdict failed:', verdictErr?.message);
+      ai = { verdict: langMode==='he' ? 'הסיגנלים מבוססים על נתונים אמיתיים. ניתוח AI לא זמין כרגע.' : 'Signals are based on real data. AI verdict unavailable right now.' };
+    }
 
-    // Render the winner
+    // Render the winner (signals are the core value; AI verdict is supplementary)
     renderTopPick(winner, ai, scored.slice(1, 4), fgData);
 
   } catch(e) {
@@ -1178,6 +1185,7 @@ function fmtCountdown(secs) {
 }
 
 function updateMarketClock() {
+  try {
   const st = getMarketStatus();
   const dot = document.getElementById('mcDot');
   const status = document.getElementById('mcStatus');
@@ -1211,6 +1219,7 @@ function updateMarketClock() {
   status.textContent = he ? (heLabels[st.label] || st.label) : st.label;
   countdown.textContent = '· ' + (he ? (heCountdown[st.countdownLabel] || st.countdownLabel) : st.countdownLabel) + ' ' + fmtCountdown(st.countdownSecs);
   session.textContent = '· ' + st.session;
+  } catch(e) { /* clock error never blocks the page */ }
 }
 
 // Start the clock — update every second
