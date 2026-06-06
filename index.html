@@ -2975,7 +2975,7 @@ async function fetchYahooData(ticker) {
   // Fetch 1: quote endpoint for real-time price (most accurate)
   // Fetch 2: 3mo chart for technicals
   const quoteUrl     = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${ticker}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,regularMarketPreviousClose,fiftyTwoWeekHigh,fiftyTwoWeekLow,marketCap,regularMarketVolume,trailingPE,epsTrailingTwelveMonths`;
-  const historicalUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=3mo&includePrePost=false`;
+  const historicalUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=8mo&includePrePost=false`;
 
   for (const proxy of proxies) {
     try {
@@ -3636,6 +3636,81 @@ function calcSMADistance(closes) {
   };
 }
 
+// === Statistical Probability Cone (1-SD bounds from realized volatility) ===
+// Uses the standard deviation of daily returns to project a ~68% (1-SD) range
+// for where price should realistically trade. Scales by √(trading days).
+// This gives a mathematical reality-check against the LLM's target guesses.
+function calcProbabilityCone(closes, price) {
+  if (!Array.isArray(closes) || closes.length < 15 || !price) return null;
+  const rets = [];
+  const w = closes.slice(-30); // up to 30 days of returns
+  for (let i = 1; i < w.length; i++) {
+    if (w[i-1]) rets.push((w[i] - w[i-1]) / w[i-1]);
+  }
+  if (rets.length < 10) return null;
+  const mean = rets.reduce((a,b)=>a+b,0) / rets.length;
+  const variance = rets.reduce((a,b)=>a+(b-mean)**2,0) / rets.length;
+  const dailyStd = Math.sqrt(variance); // daily volatility (fraction)
+  const cone = (tradingDays) => {
+    const sd = dailyStd * Math.sqrt(tradingDays); // scale by √time
+    return {
+      lower: price * (1 - sd),
+      upper: price * (1 + sd),
+      pct: sd * 100,
+    };
+  };
+  return {
+    dailyVolPct: dailyStd * 100,
+    week: cone(5),    // ~5 trading days
+    month: cone(21),  // ~21 trading days
+  };
+}
+
+// === Pearson Correlation (concentration-risk filter) ===
+// Measures how closely two price series move together. r near +1 = highly correlated
+// (low diversification benefit); r near 0 = independent; negative = hedge.
+function calcPearson(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return null;
+  const n = Math.min(a.length, b.length);
+  if (n < 10) return null; // need a meaningful sample
+  // Use daily returns, not raw prices (correct way to correlate price action)
+  const retA = [], retB = [];
+  const aw = a.slice(-n), bw = b.slice(-n);
+  for (let i = 1; i < n; i++) {
+    if (aw[i-1] && bw[i-1]) {
+      retA.push((aw[i] - aw[i-1]) / aw[i-1]);
+      retB.push((bw[i] - bw[i-1]) / bw[i-1]);
+    }
+  }
+  const m = retA.length;
+  if (m < 8) return null;
+  const meanA = retA.reduce((x,y)=>x+y,0) / m;
+  const meanB = retB.reduce((x,y)=>x+y,0) / m;
+  let num = 0, denA = 0, denB = 0;
+  for (let i = 0; i < m; i++) {
+    const da = retA[i] - meanA, db = retB[i] - meanB;
+    num += da * db; denA += da*da; denB += db*db;
+  }
+  if (denA === 0 || denB === 0) return null;
+  return num / Math.sqrt(denA * denB);
+}
+
+// Compare a stock's recent closes against every watchlist holding that has stored closes.
+// Returns array of { ticker, r } for holdings with r > threshold (concentration risk).
+function findConcentrationRisk(currentTicker, currentCloses, threshold=0.75) {
+  if (!Array.isArray(currentCloses) || currentCloses.length < 11) return [];
+  if (!Array.isArray(watchlist)) return [];
+  const risks = [];
+  watchlist.forEach(w => {
+    if (!w || w.ticker === currentTicker) return;
+    const otherCloses = w.data?._closes30;
+    if (!Array.isArray(otherCloses) || otherCloses.length < 11) return;
+    const r = calcPearson(currentCloses.slice(-30), otherCloses.slice(-30));
+    if (r != null && r > threshold) risks.push({ ticker: w.ticker, r });
+  });
+  return risks.sort((a,b) => b.r - a.r);
+}
+
 // === ATR (Average True Range) — volatility for realistic price targets ===
 // True Range = max(high-low, |high-prevClose|, |low-prevClose|). ATR = avg TR over period.
 // Falls back to close-to-close range if high/low arrays aren't available.
@@ -3973,6 +4048,7 @@ async function runAnalysis(sym) {
     crossTimeframeCheck(parsed);               // MTF agreement check
     calibrateConfidence(parsed, liveData);     // Signal consensus calibration
     applyHistoricalCalibration(parsed);        // Learn from past forecasts
+    weeklyTrendAdjustment(parsed, liveData);   // 20-week SMA primary-trend penalty
     calculatePositionSize(parsed, liveData, spyRegime); // Position size (regime-scaled)
     // Record this forecast for future calibration
     if (liveData?.price) {
@@ -4014,6 +4090,13 @@ async function runAnalysis(sym) {
         if (atrR && pr) parsed._atr = { value: atrR.atr, pct: (atrR.atr/pr)*100, approx: atrR.approx };
         parsed._rsiDivergence = detectRSIDivergence(cl, calcRSISeries(cl));
       }
+      // Store last 30 closes (for portfolio correlation when this stock is tracked)
+      if (cl.length >= 11) parsed._closes30 = cl.slice(-30);
+      // Statistical probability cone (1-SD bounds) for reality-checking AI targets
+      const pr2 = parseFloat(liveData?.price) || cl[cl.length-1];
+      parsed._probCone = calcProbabilityCone(cl, pr2);
+      // Concentration risk vs current watchlist holdings (Pearson r > 0.75)
+      parsed._concentrationRisk = findConcentrationRisk(t, cl);
     } catch(_) {}
     parsed._fhNews = fhNews;
     parsed._fhSentiment = fhSentiment;
@@ -4176,8 +4259,30 @@ function renderAnalysis(ticker, d) {
       <div id="scratchpadBody" style="display:block;background:var(--bg);border:1px solid var(--b1);border-top:none;border-radius:0 0 10px 10px;padding:14px;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--t2);white-space:pre-wrap;unicode-bidi:plaintext;max-height:300px;overflow-y:auto;">${d._scratchpad.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
     </div>` : '';
 
+  // EARNINGS RISK badge (binary-event warning)
+  const earningsBadge = d._earningsWindow ? `
+    <div style="background:linear-gradient(135deg,rgba(255,170,0,.18),rgba(255,90,90,.18));border:1px solid var(--orange);border-radius:10px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:18px;">⚠️</span>
+      <div>
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--orange);">${langMode==='he'?'סיכון דוחות':'EARNINGS RISK'}</div>
+        <div style="font-size:10px;color:var(--t2);margin-top:1px;">${langMode==='he'?('דוחות בעוד ' + (d._earningsDays!=null?d._earningsDays:'<7') + ' ימים — גודל הפוזיציה קוצץ ב-75% (אירוע בינארי בלתי צפוי)'):('Earnings in ' + (d._earningsDays!=null?d._earningsDays:'<7') + ' days — position size cut 75% (unpredictable binary event)')}</div>
+      </div>
+    </div>` : '';
+
+  // Concentration Risk warning (high correlation with existing holdings)
+  const concentrationBadge = (d._concentrationRisk && d._concentrationRisk.length > 0) ? `
+    <div style="background:rgba(255,170,0,.12);border:1px solid var(--yellow);border-radius:10px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:16px;">🔗</span>
+      <div>
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--yellow);">${langMode==='he'?'אזהרת ריכוזיות':'CONCENTRATION RISK'}</div>
+        <div style="font-size:10px;color:var(--t2);margin-top:1px;">${langMode==='he'?'מתאם גבוה עם: ':'High correlation with: '}${d._concentrationRisk.map(x => x.ticker + ' (' + Math.round(x.r*100) + '%)').join(', ')}. ${langMode==='he'?'פתיחת פוזיציה זו מקטינה את הפיזור בתיק.':'Opening this reduces portfolio diversification.'}</div>
+      </div>
+    </div>` : '';
+
   document.getElementById('analyzeContent').innerHTML = `
   <div class="panel">
+    ${earningsBadge}
+    ${concentrationBadge}
     ${scratchpadHTML}
     <div class="sh">
       <div class="sh-top">
@@ -4535,8 +4640,20 @@ function renderAnalysis(ticker, d) {
         '</div>' +
         (!isBull ? '<div style="font-size:9px;color:var(--orange);margin-bottom:8px;">⚠️ ' + (he2?'שוק דובי — גדלי הפוזיציות קוצצו ב-50% להגנה':'Bearish market — position sizes cut 50% for protection') + '</div>' : '');
       }
+      // Weekly 20-SMA primary trend row
+      let weeklyRow = '';
+      if (d._belowWeeklyTrend != null) {
+        const below = d._belowWeeklyTrend;
+        const wColor = below ? 'var(--red)' : 'var(--green)';
+        const wLabel = below ? (he2?'מתחת ל-20SMA שבועי':'Below 20-Week SMA') : (he2?'מעל 20SMA שבועי':'Above 20-Week SMA');
+        weeklyRow = '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:rgba(255,255,255,.03);border-radius:7px;border-left:3px solid ' + wColor + ';margin-bottom:8px;">' +
+          '<span style="font-size:10px;color:var(--t2);">' + (he2?'מגמה ראשית (20SMA שבועי)':'Primary Trend (20-Week SMA)') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + wColor + ';">' + wLabel + ' · ' + (d._weeklyTrendDistPct>=0?'+':'') + d._weeklyTrendDistPct.toFixed(1) + '%</span>' +
+        '</div>' +
+        (below ? '<div style="font-size:9px;color:var(--orange);margin-bottom:8px;">⚠️ ' + (he2?'מסחר נגד המגמה השבועית הראשית — ביטחון שורי וגודל פוזיציה הוקטנו':'Trading against primary weekly macro trend — bullish confidence & position cut') + '</div>' : '');
+      }
       return '<div class="card"><div class="ch">🌡️ ' + (langMode==='he'?'משטר מאקרו':'Macro Regime') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
-        '<div class="cb">' + spyRow + +
+        '<div class="cb">' + spyRow + weeklyRow + +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
             '<span style="font-size:11px;color:var(--t3);">' + (langMode==='he'?'סביבת שוק כללית':'Overall market environment') + '</span>' +
             '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + regimeColor + ';text-transform:uppercase;">' + regimeLabel + '</span>' +
@@ -4575,6 +4692,34 @@ function renderAnalysis(ticker, d) {
         '</div>';
       }
       return '<div class="card"><div class="ch">📐 ' + (he?'תנודתיות ומומנטום':'Volatility & Momentum') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div><div class="cb">' + rows + '</div></div>';
+    })()}
+
+    ${(() => {
+      // Statistical Probability Cone — 1-SD bounds to reality-check AI targets
+      if (!d._probCone) return '';
+      const he = langMode === 'he';
+      const pc = d._probCone;
+      const price = parseFloat((d.current_price||'').replace(/[^0-9.]/g,'')) || null;
+      const row = (label, cone) => {
+        return '<div style="padding:8px;background:var(--bg);border-radius:7px;margin-bottom:6px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
+            '<span style="font-size:10px;color:var(--t3);font-family:var(--mono);">' + label + '</span>' +
+            '<span style="font-size:9px;color:var(--t3);">±' + cone.pct.toFixed(1) + '% (68% prob)</span>' +
+          '</div>' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+            '<span style="font-family:var(--mono);font-size:12px;color:var(--red);font-weight:700;">$' + cone.lower.toFixed(2) + '</span>' +
+            '<span style="font-size:9px;color:var(--t3);">' + (he?'טווח סטטיסטי':'statistical range') + '</span>' +
+            '<span style="font-family:var(--mono);font-size:12px;color:var(--green);font-weight:700;">$' + cone.upper.toFixed(2) + '</span>' +
+          '</div>' +
+        '</div>';
+      };
+      return '<div class="card"><div class="ch">🎯 ' + (he?'קונוס הסתברות סטטיסטי':'Statistical Probability Cone') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div>' +
+        '<div class="cb">' +
+          '<div style="font-size:10px;color:var(--t3);margin-bottom:8px;">' + (he?('תנודתיות יומית ' + pc.dailyVolPct.toFixed(1) + '% — היכן המחיר אמור לנוע ב-68% מהמקרים:'):('Daily volatility ' + pc.dailyVolPct.toFixed(1) + '% — where price should trade 68% of the time:')) + '</div>' +
+          row(he?'שבוע':'1 Week', pc.week) +
+          row(he?'חודש':'1 Month', pc.month) +
+          '<div style="font-size:8px;color:var(--t3);margin-top:4px;font-style:italic;">' + (he?'אם יעד ה-AI מחוץ לטווח הזה — הוא אגרסיבי סטטיסטית. השווה למספרים של קלוד למעלה.':'If an AI target sits outside this range, it is statistically aggressive. Cross-check against Claude\'s targets above.') + '</div>' +
+        '</div></div>';
     })()}
 
     ${txtCard(tr('Key Catalysts'), d.key_catalysts, 'var(--green)')}
@@ -6112,12 +6257,48 @@ function renderScanner(data, riskLevel) {
 
 // ── Position Sizing (Risk-Adjusted) ───────────────────────────
 // Suggests position size as % of portfolio based on Kelly Criterion + risk factors
+// === Weekly 20-SMA Trend Confluence ===
+// The 20-week SMA (~100 trading days) is a widely-watched primary trend gauge.
+// Price below it = bearish primary trend. We penalize short-term bullish confidence
+// and position size when fighting that trend (institutional trend-alignment discipline).
+function weeklyTrendAdjustment(parsed, liveData) {
+  if (!parsed?.forecasts) return parsed;
+  const closes = liveData?._closes || [];
+  if (closes.length < 100) return parsed; // need ~20 weeks of daily bars
+  const price = parseFloat(liveData?.price) || closes[closes.length-1];
+  // 20-week SMA ≈ average of the last 100 trading days
+  const sma20w = closes.slice(-100).reduce((a,b)=>a+b,0) / 100;
+  const belowTrend = price < sma20w;
+  parsed._weekly20SMA = sma20w;
+  parsed._belowWeeklyTrend = belowTrend;
+  parsed._weeklyTrendDistPct = ((price - sma20w) / sma20w) * 100;
+
+  if (belowTrend) {
+    // Penalize bullish short-term confidence when fighting the primary downtrend
+    for (const tf of ['week', 'month']) {
+      const f = parsed.forecasts[tf];
+      if (f && /up|bull/i.test(f.direction || f.signal || '')) {
+        f.confidence = Math.max(35, (f.confidence || 50) - 12);
+        f._weekly_trend_penalty = -12;
+      }
+    }
+  }
+  return parsed;
+}
+
 function calculatePositionSize(parsed, liveData, spyRegime) {
   if (!parsed?.forecasts) return parsed;
 
   // Market regime multiplier: in a bearish broad market (SPY < 200-SMA),
   // cut all position sizes by 50% to protect capital (risk management).
   const regimeMult = (spyRegime && spyRegime.regime === 'bearish') ? 0.5 : 1.0;
+
+  // Earnings binary-event buffer: within 7 days of earnings, cut position 75%
+  // to avoid gambling on an unpredictable binary corporate event.
+  const earningsMult = parsed._earningsWindow ? 0.25 : 1.0;
+
+  // Weekly trend buffer: trading below the 20-week SMA → cut position 40%
+  const weeklyTrendMult = parsed._belowWeeklyTrend ? 0.6 : 1.0;
 
   for (const tf of Object.keys(parsed.forecasts)) {
     const f = parsed.forecasts[tf];
@@ -6159,6 +6340,10 @@ function calculatePositionSize(parsed, liveData, spyRegime) {
 
     // Apply market-regime multiplier (bearish market → halve position)
     positionSize *= regimeMult;
+    // Apply earnings buffer (within 7 days → cut 75%)
+    positionSize *= earningsMult;
+    // Apply weekly-trend buffer (below 20-week SMA → cut 40%)
+    positionSize *= weeklyTrendMult;
 
     // Cap at 10% per position (safety)
     positionSize = Math.min(0.10, positionSize);
@@ -6169,6 +6354,7 @@ function calculatePositionSize(parsed, liveData, spyRegime) {
                                   positionSize >= 0.04 ? 'Standard' :
                                   positionSize >= 0.02 ? 'Small' : 'Minimal';
       if (regimeMult < 1) f.position_regime_note = 'bearish';
+      if (earningsMult < 1) f.position_earnings_note = true;
     } else {
       f.position_size_pct = '0';
       f.position_recommendation = 'AVOID';
@@ -6386,6 +6572,10 @@ function earningsAdjustment(parsed, liveData) {
   }
 
   if (daysToEarnings === null || daysToEarnings < 0) return parsed;
+
+  // Flag the earnings window for the badge + Kelly buffer (binary-event risk)
+  parsed._earningsDays = daysToEarnings;
+  parsed._earningsWindow = daysToEarnings <= 7; // within 7 days = high binary risk
 
   // If earnings within 7 days — high uncertainty
   // If within 14 days — moderate uncertainty
