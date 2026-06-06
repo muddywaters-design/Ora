@@ -856,6 +856,7 @@ async function showTopPick() {
       const rank = parseInt(wsb.rank);
       const rank24h = parseInt(wsb.rank_24h_ago) || rank;
       const rising = rank24h > rank + 3;
+      const rankAdvance = (!isNaN(rank) && !isNaN(rank24h)) ? Math.max(0, rank24h - rank) : 0; // ranks climbed since 24h ago
       const todayChange = parseFloat(live.changePct) || 0;
       const crashed = todayChange < -15;
       const surged = todayChange > 20;
@@ -863,7 +864,7 @@ async function showTopPick() {
 
       // === Continuous scores (0.0-1.0) instead of binary (#4) ===
       const sc = {
-        wsb:     scoreWSB(mentions, mentionGrowth, rising, crashed),
+        wsb:     scoreWSB(mentions, mentionGrowth, rising, crashed, rankAdvance),
         rsi:     scoreRSI(rsi),
         vol:     scoreVolume(volRatio),
         macd:    scoreMACD(macd, macdSig),
@@ -1178,15 +1179,23 @@ function scoreAnalyst(target, price) {
 }
 
 // WSB momentum: mention growth, smooth (capped to avoid pump distortion)
-function scoreWSB(mentions, growth, rising, crashed) {
-  if (mentions < 50) return 0.2;       // too little buzz
-  if (crashed) return 0.15;            // buzz during crash = panic
-  // Combine volume of mentions + growth, smooth
-  const volScore = rampScore(mentions, 50, 500);
-  const growthScore = rampScore(growth, -20, 80);
-  let s = 0.4 * volScore + 0.6 * growthScore;
-  if (rising) s = Math.min(1, s + 0.1);
-  return s;
+function scoreWSB(mentions, growth, rising, crashed, rankAdvance) {
+  // Require a minimum liquidity of buzz so we're not scoring statistical noise,
+  // but keep the floor low (a SURGING small stock is exactly what we want to catch).
+  if (mentions < 30) return 0.2;       // too little buzz to be meaningful
+  if (crashed) return 0.15;            // buzz during a price crash = panic, not opportunity
+
+  // GROWTH-DOMINANT scoring: heavily favor a sudden surge in retail interest
+  // over raw absolute volume (raw volume biases toward mega-caps like TSLA/NVDA
+  // that are ALWAYS highly mentioned). We want stocks experiencing a velocity spike.
+  const growthScore = rampScore(growth, -10, 120);          // % change in mentions vs 24h ago
+  const volScore = rampScore(mentions, 30, 800);            // absolute buzz (minor weight)
+  const rankScore = rankAdvance != null ? rampScore(rankAdvance, 0, 50) : 0; // climbed N ranks
+
+  // 65% growth + 20% rank advancement + 15% raw volume → isolates breakouts
+  let s = 0.65 * growthScore + 0.20 * rankScore + 0.15 * volScore;
+  if (rising) s = Math.min(1, s + 0.08);                    // extra nudge if climbing the board
+  return Math.max(0, Math.min(1, s));
 }
 
 // Market mood (F&G): contrarian — moderate fear is best entry
@@ -5774,7 +5783,10 @@ function renderAccuracy(ticker, data) {
 // ── WSB Top 5 ─────────────────────────────────────────────────
 // ── Fetch real WSB data from ApeWisdom API ───────────────────
 async function fetchApeWisdom() {
-  // ApeWisdom — real Reddit WSB sentiment tracker, free public API
+  // ApeWisdom — real Reddit WSB sentiment tracker, free public API.
+  // NOTE: the free API returns a 24h-based snapshot with 24h-ago comparison fields
+  // (mentions_24h_ago, rank_24h_ago). There is no true 7-day window parameter, so we
+  // derive momentum from the 24h delta — which is exactly what isolates surging tickers.
   const url = 'https://apewisdom.io/api/v1.0/filter/wallstreetbets';
   const proxies = [
     '',  // try direct first (sometimes CORS allowed)
@@ -5788,7 +5800,13 @@ async function fetchApeWisdom() {
       const r = await fetch(fullUrl, { signal: AbortSignal.timeout(6000) });
       if (!r.ok) continue;
       const data = await r.json();
-      if (data?.results?.length > 0) return data.results;
+      if (data?.results?.length > 0) {
+        // Strip broad-market index/macro ETFs so they don't crowd out individual
+        // momentum stocks in the Top Pick scanner (noise reduction).
+        const EXCLUDE = new Set(['SPY','QQQ','DIA','IWM','VOO','VTI','SPX','VXX','UVXY','SQQQ','TQQQ','SOXL','SOXS','SPXL','SPXS','VIX','ES','NQ']);
+        const filtered = data.results.filter(x => x && x.ticker && !EXCLUDE.has(String(x.ticker).toUpperCase()));
+        return filtered.length > 0 ? filtered : data.results;
+      }
     } catch(_) { continue; }
   }
   return null;
