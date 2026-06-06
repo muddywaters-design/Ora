@@ -2223,6 +2223,35 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     } catch(_) { return ''; }
   })();
 
+  // ATR volatility + RSI divergence (genuinely valuable signals, computed client-side)
+  const atrDivergenceCtx = (() => {
+    try {
+      const closes = liveData?._closes || [];
+      if (closes.length < 16) return '';
+      const parts = [];
+      const price = parseFloat(liveData?.price) || closes[closes.length-1];
+
+      // ATR — volatility regime + realistic move expectation
+      const atrResult = calcATR(liveData?._highs, liveData?._lows, closes);
+      if (atrResult && price) {
+        const atrPct = (atrResult.atr / price) * 100;
+        const regime = atrPct > 4 ? 'HIGH' : atrPct < 1.5 ? 'LOW' : 'MEDIUM';
+        parts.push('ATR:$' + atrResult.atr.toFixed(2) + '(' + atrPct.toFixed(1) + '%,vol=' + regime + (atrResult.approx ? ',approx' : '') + ')');
+        // Realistic 1-week move ≈ ATR × √5 trading days
+        const weekMove = atrResult.atr * Math.sqrt(5);
+        parts.push('~1wk±$' + weekMove.toFixed(2) + '(stat range)');
+      }
+
+      // RSI divergence — hidden reversal signal
+      const rsiSeries = calcRSISeries(closes);
+      const div = detectRSIDivergence(closes, rsiSeries);
+      if (div === 'bullish') parts.push('BULLISH-RSI-DIVERGENCE(price lower-low,RSI higher-low=possible reversal up)');
+      else if (div === 'bearish') parts.push('BEARISH-RSI-DIVERGENCE(price higher-high,RSI lower-high=possible reversal down)');
+
+      return parts.length ? parts.join('. ') + '.' : '';
+    } catch(_) { return ''; }
+  })();
+
   const breakoutCtx = (() => {
     if (!liveData?.price || !liveData?.high52 || !liveData?.low52) return '';
     const p=parseFloat(liveData.price), h=parseFloat(liveData.high52), l=parseFloat(liveData.low52);
@@ -2235,7 +2264,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
   const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
   const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level, fundamental_outlook.summary, full_analysis) IN HEBREW. Numbers, tickers, and verdict codes stay in English.' : '';
-  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx}
+  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","fundamental_outlook":{"summary":"2-3 sentences on financial health","health_score":"1-10","bull_target_pct":"+X%","bear_target_pct":"-X%","base_case_pct":"+/-X%","verdict":"STRONG|HEALTHY|MIXED|WEAK|RISKY"},"full_analysis":"3 sentences."}`;
 }
@@ -3158,6 +3187,8 @@ async function fetchYahooData(ticker) {
         price: price.toFixed(2), change, changePct,
         prevClose: prev ? prev.toFixed(2) : null,
         _closes: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [],
+        _highs: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.high?.filter(x=>x!=null) || [],
+        _lows: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.low?.filter(x=>x!=null) || [],
         high52:    high52 || '—',
         low52:     low52  || '—',
         marketCap: marketCap ? formatMarketCap(marketCap) : '—',
@@ -3192,6 +3223,8 @@ async function fetchYahooData(ticker) {
       low52: twelveEnrich.low52 || '—',
       source: 'Twelve Data (indicators only)',
       _closes: [],
+      _highs: [],
+      _lows: [],
     };
     priceCache[cacheKey] = { data: tdResult, timestamp: Date.now() };
     return tdResult;
@@ -3302,6 +3335,8 @@ async function fetchLivePrice(ticker) {
       low52: twelveEnrich.low52 || '—',
       source: 'Twelve Data (indicators only)',
       _closes: [],
+      _highs: [],
+      _lows: [],
     };
     priceCache[cacheKey] = { data: tdResult, timestamp: Date.now() };
     return tdResult;
@@ -3530,6 +3565,90 @@ function calcSMADistance(closes) {
     dist200: sma200 ? ((price - sma200) / sma200) * 100 : null,
     goldenCross: (sma50 && sma200) ? sma50 > sma200 : null, // 50 above 200 = bullish
   };
+}
+
+// === ATR (Average True Range) — volatility for realistic price targets ===
+// True Range = max(high-low, |high-prevClose|, |low-prevClose|). ATR = avg TR over period.
+// Falls back to close-to-close range if high/low arrays aren't available.
+function calcATR(highs, lows, closes, period=14) {
+  if (!Array.isArray(closes) || closes.length < 2) return null;
+  const trs = [];
+  const hasHL = Array.isArray(highs) && Array.isArray(lows) && highs.length === closes.length && lows.length === closes.length;
+  for (let i = 1; i < closes.length; i++) {
+    const prevClose = closes[i-1];
+    let tr;
+    if (hasHL && highs[i] != null && lows[i] != null) {
+      tr = Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - prevClose),
+        Math.abs(lows[i] - prevClose)
+      );
+    } else {
+      // Close-only approximation: absolute day-over-day move
+      tr = Math.abs(closes[i] - prevClose);
+    }
+    trs.push(tr);
+  }
+  if (trs.length < 1) return null;
+  const slice = trs.slice(-period);
+  const atr = slice.reduce((a,b)=>a+b,0) / slice.length;
+  return { atr, approx: !hasHL };
+}
+
+// === RSI series + divergence detection ===
+// Returns an array of RSI values (one per day after the warmup period).
+function calcRSISeries(closes, period=14) {
+  if (!Array.isArray(closes) || closes.length < period + 1) return [];
+  const rsis = [];
+  // Seed average gain/loss
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const ch = closes[i] - closes[i-1];
+    if (ch >= 0) gain += ch; else loss -= ch;
+  }
+  let avgGain = gain / period, avgLoss = loss / period;
+  rsis.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+  // Wilder smoothing for the rest
+  for (let i = period + 1; i < closes.length; i++) {
+    const ch = closes[i] - closes[i-1];
+    const g = ch >= 0 ? ch : 0;
+    const l = ch < 0 ? -ch : 0;
+    avgGain = (avgGain * (period - 1) + g) / period;
+    avgLoss = (avgLoss * (period - 1) + l) / period;
+    rsis.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+  }
+  return rsis;
+}
+
+// Detect RSI divergence over the recent window.
+// Bullish: price makes a lower low while RSI makes a higher low (hidden reversal up).
+// Bearish: price makes a higher high while RSI makes a lower high (hidden reversal down).
+function detectRSIDivergence(closes, rsiSeries, lookback=10) {
+  if (!Array.isArray(closes) || !Array.isArray(rsiSeries) || rsiSeries.length < 6) return 'none';
+  // Align: rsiSeries is shorter than closes by the warmup. Compare the last `lookback` overlapping points.
+  const n = Math.min(lookback, rsiSeries.length, closes.length);
+  const priceWin = closes.slice(-n);
+  const rsiWin = rsiSeries.slice(-n);
+  if (priceWin.length < 4) return 'none';
+
+  const minOf = arr => Math.min(...arr);
+  const maxOf = arr => Math.max(...arr);
+
+  // Compare the most-recent extreme (last 1/3) against the prior portion's extreme.
+  const recentN = Math.max(2, Math.floor(priceWin.length / 3));
+  const priceRecent = priceWin.slice(-recentN);
+  const pricePrior  = priceWin.slice(0, priceWin.length - recentN);
+  const rsiRecent   = rsiWin.slice(-recentN);
+  const rsiPrior    = rsiWin.slice(0, rsiWin.length - recentN);
+  if (pricePrior.length < 2 || rsiPrior.length < 2) return 'none';
+
+  // Bullish divergence: price makes a lower low recently, but RSI's recent low is higher
+  if (minOf(priceRecent) < minOf(pricePrior) && minOf(rsiRecent) > minOf(rsiPrior)) return 'bullish';
+
+  // Bearish divergence: price makes a higher high recently, but RSI's recent high is lower
+  if (maxOf(priceRecent) > maxOf(pricePrior) && maxOf(rsiRecent) < maxOf(rsiPrior)) return 'bearish';
+
+  return 'none';
 }
 
 function formatMarketCap(n) {
@@ -3813,6 +3932,16 @@ async function runAnalysis(sym) {
     window.currentParsed = parsed;
     parsed._scratchpad = window._lastScratchpad || null;
     parsed._macroData = macroData;
+    // Attach ATR + RSI divergence for display
+    try {
+      const cl = liveData?._closes || [];
+      if (cl.length >= 16) {
+        const pr = parseFloat(liveData?.price) || cl[cl.length-1];
+        const atrR = calcATR(liveData?._highs, liveData?._lows, cl);
+        if (atrR && pr) parsed._atr = { value: atrR.atr, pct: (atrR.atr/pr)*100, approx: atrR.approx };
+        parsed._rsiDivergence = detectRSIDivergence(cl, calcRSISeries(cl));
+      }
+    } catch(_) {}
     parsed._fhNews = fhNews;
     parsed._fhAnalysts = fhAnalysts;
     parsed._fhInsider = fhInsider;
@@ -4316,6 +4445,33 @@ function renderAnalysis(ticker, d) {
             (spyI ? '<div style="padding:8px;background:var(--bg);border-radius:7px;text-align:center;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">SPY</div><div style="font-family:var(--mono);font-size:14px;font-weight:700;color:' + spyI.color + ';margin-top:2px;">' + (m.spy5d>=0?'+':'') + m.spy5d.toFixed(1) + '%</div><div style="font-size:8px;color:var(--t3);margin-top:1px;">5 day</div></div>' : '') +
           '</div>' +
         '</div></div>';
+    })()}
+
+    ${(() => {
+      // ATR volatility + RSI divergence card (computed client-side from price history)
+      if (!d._atr && (!d._rsiDivergence || d._rsiDivergence === 'none')) return '';
+      const he = langMode === 'he';
+      let rows = '';
+      if (d._atr) {
+        const regime = d._atr.pct > 4 ? (he?'גבוהה':'High') : d._atr.pct < 1.5 ? (he?'נמוכה':'Low') : (he?'בינונית':'Medium');
+        const rColor = d._atr.pct > 4 ? 'var(--red)' : d._atr.pct < 1.5 ? 'var(--green)' : 'var(--yellow)';
+        rows += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;">' +
+          '<span style="font-size:11px;color:var(--t2);">ATR ' + (he?'(תנודתיות)':'(volatility)') + (d._atr.approx?' ~':'') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;color:' + rColor + ';font-weight:700;">$' + d._atr.value.toFixed(2) + ' · ' + d._atr.pct.toFixed(1) + '% · ' + regime + '</span>' +
+        '</div>';
+      }
+      if (d._rsiDivergence === 'bullish' || d._rsiDivergence === 'bearish') {
+        const isBull = d._rsiDivergence === 'bullish';
+        const dColor = isBull ? 'var(--green)' : 'var(--red)';
+        const dLabel = isBull ? (he?'דיברגנס שורי':'Bullish Divergence') : (he?'דיברגנס דובי':'Bearish Divergence');
+        const dDesc = isBull ? (he?'מחיר שפל נמוך, RSI שפל גבוה — היפוך אפשרי כלפי מעלה':'Price lower-low, RSI higher-low — possible reversal up')
+                             : (he?'מחיר שיא גבוה, RSI שיא נמוך — היפוך אפשרי כלפי מטה':'Price higher-high, RSI lower-high — possible reversal down');
+        rows += '<div style="padding:8px;background:rgba(255,255,255,.03);border-radius:7px;border-left:3px solid ' + dColor + ';margin-top:4px;">' +
+          '<div style="font-family:var(--mono);font-size:11px;font-weight:700;color:' + dColor + ';">⚡ ' + dLabel + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);margin-top:2px;">' + dDesc + '</div>' +
+        '</div>';
+      }
+      return '<div class="card"><div class="ch">📐 ' + (he?'תנודתיות ומומנטום':'Volatility & Momentum') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div><div class="cb">' + rows + '</div></div>';
     })()}
 
     ${txtCard(tr('Key Catalysts'), d.key_catalysts, 'var(--green)')}
