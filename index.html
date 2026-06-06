@@ -587,15 +587,8 @@ body.lang-he .fc-tf {
 // ── State ──────────────────────────────────────────────────────
 let wlSortBy = 'date';
 let wlSortDir = -1;
-let watchlist = (() => {
-  try {
-    const raw = localStorage.getItem('so_wl2');
-    return raw ? JSON.parse(raw) : [];
-  } catch(e) {
-    console.warn('Watchlist parse error:', e);
-    return [];
-  }
-})();
+let watchlist = safeLSGet('so_wl2', []);
+if (!Array.isArray(watchlist)) watchlist = [];
 let currentTicker = '';
 let currentResult = null;
 
@@ -3564,6 +3557,34 @@ function calcBollinger(closes, period=20, mult=2) {
 const DATA_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
 const DATA_CACHE_PREFIX = 'so_dc_';
 
+// === Defensive localStorage layer ===
+// Safely read+parse JSON from localStorage. If the stored value is missing,
+// corrupted, or not valid JSON, log a warning and return the provided fallback
+// instead of throwing a fatal error that would break the whole app.
+function safeLSGet(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null || raw === undefined || raw === '') return fallback;
+    return JSON.parse(raw);
+  } catch (e) {
+    console.warn('[StockOracle] Corrupted localStorage for "' + key + '" — using safe default.', e && e.message);
+    return fallback;
+  }
+}
+
+// Safely stringify+write JSON to localStorage. Never throws (e.g. quota exceeded
+// or circular structure) — logs a warning and returns false on failure.
+function safeLSSet(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (e) {
+    console.warn('[StockOracle] Could not save localStorage for "' + key + '".', e && e.message);
+    return false;
+  }
+}
+
+
 function getCachedData(key) {
   try {
     const raw = localStorage.getItem(DATA_CACHE_PREFIX + key);
@@ -5446,7 +5467,7 @@ async function refreshWatchlistPrices() {
 function forceRenderWatchlist() {
   // Read fresh from localStorage
   let wl = [];
-  try { wl = JSON.parse(localStorage.getItem('so_wl2') || '[]'); } catch(e) {}
+  wl = safeLSGet('so_wl2', []);
   if (!wl.length) return;
   // Sync global variable
   watchlist.length = 0;
@@ -6409,7 +6430,7 @@ function crossTimeframeCheck(parsed) {
 // Learn from past forecasts and adjust confidence
 function getHistoricalAccuracy() {
   try {
-    const history = JSON.parse(localStorage.getItem('so_forecast_history') || '[]');
+    const history = safeLSGet('so_forecast_history', []);
     if (history.length < 5) return null; // need minimum data
 
     // Group by confidence bucket and compute actual hit rate
@@ -7067,7 +7088,7 @@ function setWlSort(field) {
   renderWatchlist();
 }
 
-let forecastHistory = JSON.parse(localStorage.getItem('so_forecast_history') || '[]');
+let forecastHistory = safeLSGet('so_forecast_history', []);
 
 // Auto-check forecasts on page load (once per day)
 async function autoCheckForecasts() {
@@ -7198,7 +7219,7 @@ const PRICE_CACHE_TTL_SCAN = 60000;   // 60s during multi-stock scans (avoids ra
 let _activeCacheTTL = PRICE_CACHE_TTL; // current TTL (raised temporarily during Top Pick scan)
 
 let portfolios = (() => {
-  try { return JSON.parse(localStorage.getItem('so_portfolios')) || []; } catch(_) { return []; }
+  return safeLSGet('so_portfolios', []) || [];
 })();
 let activePortfolioId = localStorage.getItem('so_active_portfolio') || portfolios[0]?.id;
 
