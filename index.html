@@ -770,6 +770,8 @@ async function showTopPick() {
     // STEP 2: Fetch real market data — batched to avoid rate limits
     setStep(2, 'Fetching live market data for ' + candidates.length + ' stocks…');
     const fgData = await fetchFearGreedFromAPI();
+    // Fetch real macro (VIX, SPY trend) so the regime isn't based on F&G alone (Gap 2)
+    const macroData = await withTimeout(cachedFetch('macro', () => fetchMacroData()), 6000).catch(() => null);
 
     // Batch fetches in groups of 5 to respect API rate limits
     const marketResults = [];
@@ -797,9 +799,38 @@ async function showTopPick() {
     setStep(3, 'Scoring ' + stocks.length + ' stocks on 7 signals…');
 
     // Detect market regime from macro data to adjust weights (#7)
-    const regime = fgData && fgData.score != null
-      ? (fgData.score < 30 ? 'fear' : fgData.score > 70 ? 'greed' : 'neutral')
-      : 'neutral';
+    // Composite regime from multiple REAL signals, not F&G alone (Gap 2):
+    //   - VIX level (volatility): >25 = stress, <15 = calm
+    //   - SPY 5-day trend (market direction)
+    //   - Fear & Greed (sentiment confirmation)
+    // Each votes; majority sets the regime. More robust than a single sentiment index.
+    const regime = (() => {
+      let fearVotes = 0, greedVotes = 0, votes = 0;
+      const vix = macroData?.vix;
+      const spy5d = macroData?.spy5d;
+      const fg = fgData?.score;
+      if (vix != null) {
+        votes++;
+        if (vix > 25) fearVotes++;            // elevated volatility = risk-off
+        else if (vix < 15) greedVotes++;      // calm = risk-on
+      }
+      if (spy5d != null) {
+        votes++;
+        if (spy5d < -2) fearVotes++;          // market falling
+        else if (spy5d > 2) greedVotes++;     // market rising
+      }
+      if (fg != null) {
+        votes++;
+        if (fg < 30) fearVotes++;             // fearful sentiment
+        else if (fg > 70) greedVotes++;       // greedy sentiment
+      }
+      if (votes === 0) return 'neutral';
+      if (fearVotes > greedVotes && fearVotes >= 1) return 'fear';
+      if (greedVotes > fearVotes && greedVotes >= 1) return 'greed';
+      return 'neutral';
+    })();
+    // High-volatility flag (separate from direction) — reduces confidence later
+    const highVol = (macroData?.vix != null && macroData.vix > 28);
 
     // Regime-aware signal weights. In fear markets, momentum/volume matter more
     // (oversold bounces); in greed, analyst fundamentals get more weight.
@@ -883,7 +914,9 @@ async function showTopPick() {
       const realSignals = signals.filter(s => s.real).length;
 
       // Crash penalty on composite
-      const adjScore = crashed ? compositeScore * 0.5 : compositeScore;
+      // Crash penalty + high-volatility dampening (Phase 5: reduce confidence in stress regimes)
+      let adjScore = crashed ? compositeScore * 0.5 : compositeScore;
+      if (highVol) adjScore *= 0.9; // VIX>28: shave 10% — less reliable signals in turmoil
 
       return {
         ticker: wsb.ticker,
@@ -3750,7 +3783,29 @@ async function runAnalysis(sym) {
     applyHistoricalCalibration(parsed);        // Learn from past forecasts
     calculatePositionSize(parsed, liveData);   // Suggest position size
     // Record this forecast for future calibration
-    if (liveData?.price) recordForecast(t, parsed.forecasts, parseFloat(liveData.price));
+    if (liveData?.price) {
+      // Snapshot signal scores at forecast time for per-signal learning (Gap 1)
+      const sigSnapshot = (() => {
+        try {
+          const closes = liveData._closes || [];
+          const rsi = parseFloat(liveData.rsi);
+          const volR = parseFloat(liveData.volumeRatio);
+          const macd = parseFloat(liveData.macd);
+          const macdSig = parseFloat(liveData.macdSignal);
+          const sectorRel = parseFloat(liveData.sectorRelative);
+          const target = parseFloat(liveData.targetPrice);
+          const price = parseFloat(liveData.price);
+          return {
+            rsi:     !isNaN(rsi)     ? scoreRSI(rsi)               : null,
+            volume:  !isNaN(volR)    ? scoreVolume(volR)           : null,
+            macd:    (!isNaN(macd)&&!isNaN(macdSig)) ? scoreMACD(macd, macdSig) : null,
+            sector:  !isNaN(sectorRel) ? scoreSector(sectorRel)    : null,
+            analyst: (!isNaN(target)&&price) ? scoreAnalyst(target, price) : null,
+          };
+        } catch(_) { return null; }
+      })();
+      recordForecast(t, parsed.forecasts, parseFloat(liveData.price), sigSnapshot);
+    }
     currentResult = parsed;
     clearInterval(iv);
     clearInterval(window._elapsedInterval);
@@ -4478,6 +4533,18 @@ async function runAllAccuracy() {
         weekVerdict, monthVerdict, overallVerdict,
         hasLive: !!liveData,
       });
+
+      // Persist numeric outcome back to forecastHistory so per-signal learning has data (Gap 1).
+      // Match by ticker; update the most recent record that has a signal snapshot but no outcome yet.
+      if (actualChangePct !== null && overallVerdict !== 'PENDING') {
+        const hist = forecastHistory.find(r =>
+          r.ticker === entry.ticker && r.signalScores && (!r.outcomes || !r.outcomes.week)
+        );
+        if (hist) {
+          hist.outcomes = hist.outcomes || {};
+          hist.outcomes.week = { verdict: overallVerdict, actualChange: actualChangePct };
+        }
+      }
     } catch(e) {
       results.push({
         ticker: entry.ticker, company: entry.company,
@@ -4491,9 +4558,60 @@ async function runAllAccuracy() {
     // No delay needed — prices already fetched in parallel
   }
 
+  // Persist any outcome write-backs from this evaluation (Gap 1 learning data)
+  try { localStorage.setItem('so_forecast_history', JSON.stringify(forecastHistory)); } catch(_) {}
   renderAccDashboard(results);
   btn.disabled = false;
   btn.textContent = '⚡ Check All Forecasts';
+}
+
+// === Per-Signal Hit-Rate Tracking (Gap 1 — lightweight online learning) ===
+// For each evaluated forecast, we know (a) each signal's score at forecast time
+// and (b) whether the stock actually rose. A signal that scored high WHEN the stock
+// rose (or low when it fell) was "correct". Over time this reveals which signals
+// actually predict — the foundation for data-driven reweighting.
+function computeSignalAccuracy() {
+  const signalNames = ['rsi', 'volume', 'macd', 'sector', 'analyst'];
+  const stats = {};
+  signalNames.forEach(s => stats[s] = { correct: 0, total: 0, weightedCorrect: 0 });
+
+  forecastHistory.forEach(rec => {
+    if (!rec.signalScores) return;
+    // Use the week outcome if available, else month
+    const outcome = rec.outcomes?.week || rec.outcomes?.month;
+    if (!outcome || outcome.actualChange == null) return;
+    const wentUp = outcome.actualChange > 0;
+
+    signalNames.forEach(s => {
+      const score = rec.signalScores[s];
+      if (score == null) return;
+      stats[s].total++;
+      // Signal "predicted up" if score >= 0.55. Correct if that matched reality.
+      const predictedUp = score >= 0.55;
+      if (predictedUp === wentUp) {
+        stats[s].correct++;
+        stats[s].weightedCorrect += Math.abs(score - 0.5) * 2; // confidence-weighted
+      }
+    });
+  });
+
+  // Convert to hit rates + a suggested weight multiplier
+  const result = {};
+  signalNames.forEach(s => {
+    const st = stats[s];
+    if (st.total < 5) { // need minimum sample
+      result[s] = { hitRate: null, sample: st.total, suggestedWeight: 1.0 };
+    } else {
+      const hitRate = st.correct / st.total;
+      // Suggested weight: signals above 55% hit rate gain weight, below 45% lose it.
+      // Clamped to [0.5, 1.5] to avoid over-fitting on small samples.
+      let w = 1.0;
+      if (hitRate >= 0.55) w = 1.0 + Math.min(0.5, (hitRate - 0.55) * 3);
+      else if (hitRate <= 0.45) w = 1.0 - Math.min(0.5, (0.45 - hitRate) * 3);
+      result[s] = { hitRate, sample: st.total, suggestedWeight: w };
+    }
+  });
+  return result;
 }
 
 // === Professional Statistical Metrics (#4) ===
@@ -4678,6 +4796,40 @@ function renderAccDashboard(results) {
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">' + (he?'📐 מדדים מקצועיים':'📐 Professional Metrics') + '</div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + brierCard + sharpeCard + ddCard + avgCard + '</div>' +
           (pro.paperTrades > 0 ? '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?'מבוסס על סימולציית paper-trade של תחזיות שוריות בביטחון >70%. Sharpe שנתי (×√52). לא ייעוץ השקעות.':'Based on paper-trade simulation of >70% confidence bullish forecasts. Sharpe is annualized (×√52). Not investment advice.') + '</div>' : '') +
+        '</div>';
+      })()}
+
+      ${(() => {
+        // Per-signal hit-rate panel (Gap 1 learning) — shows which signals actually predict
+        const sigAcc = computeSignalAccuracy();
+        const he2 = (typeof langMode !== 'undefined' && langMode === 'he');
+        const names = { rsi:'RSI', volume:'Volume', macd:'MACD', sector:'Sector RS', analyst:'Analysts' };
+        const rows = Object.keys(sigAcc).filter(k => sigAcc[k].hitRate != null);
+        if (rows.length === 0) {
+          return '<div style="padding:4px 16px 14px;">' +
+            '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">' + (he2?'🎯 דיוק לפי סיגנל':'🎯 Per-Signal Accuracy') + '</div>' +
+            '<div style="font-size:9px;color:var(--t3);font-style:italic;">' + (he2?'נאסף עם כל תחזית שמתממשת. צריך 5+ תחזיות מאומתות לכל סיגנל.':'Collected as forecasts resolve. Needs 5+ evaluated forecasts per signal.') + '</div>' +
+          '</div>';
+        }
+        const bars = rows.map(k => {
+          const a = sigAcc[k];
+          const pct = Math.round(a.hitRate * 100);
+          const color = a.hitRate >= 0.55 ? 'var(--green)' : a.hitRate >= 0.45 ? 'var(--yellow)' : 'var(--red)';
+          const wLabel = a.suggestedWeight > 1.05 ? '↑' + a.suggestedWeight.toFixed(2) : a.suggestedWeight < 0.95 ? '↓' + a.suggestedWeight.toFixed(2) : '=1.0';
+          return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">' +
+            '<div style="width:64px;font-family:var(--mono);font-size:10px;color:var(--t2);">' + names[k] + '</div>' +
+            '<div style="flex:1;height:14px;background:var(--bg);border-radius:7px;overflow:hidden;position:relative;">' +
+              '<div style="height:100%;width:' + pct + '%;background:' + color + ';border-radius:7px;transition:width .4s;"></div>' +
+            '</div>' +
+            '<div style="width:34px;text-align:right;font-family:var(--mono);font-size:10px;font-weight:700;color:' + color + ';">' + pct + '%</div>' +
+            '<div style="width:42px;text-align:right;font-family:var(--mono);font-size:8px;color:var(--t3);">' + wLabel + '</div>' +
+            '<div style="width:30px;text-align:right;font-size:8px;color:var(--t3);">n=' + a.sample + '</div>' +
+          '</div>';
+        }).join('');
+        return '<div style="padding:4px 16px 14px;">' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">' + (he2?'🎯 דיוק לפי סיגנל':'🎯 Per-Signal Accuracy') + '</div>' +
+          bars +
+          '<div style="font-size:8px;color:var(--t3);margin-top:6px;font-style:italic;">' + (he2?'שיעור פגיעה = כמה פעמים הסיגנל ניבא נכון את הכיוון. החץ = משקל מומלץ.':'Hit rate = how often this signal predicted direction correctly. Arrow = suggested weight from its track record.') + '</div>' +
         '</div>';
       })()}
 
@@ -6446,7 +6598,7 @@ function getTickerAccuracy(ticker) {
   };
 }
 
-function recordForecast(ticker, forecasts, livePrice) {
+function recordForecast(ticker, forecasts, livePrice, signalScores) {
   const record = {
     id: Date.now(),
     ticker,
@@ -6458,6 +6610,7 @@ function recordForecast(ticker, forecasts, livePrice) {
       half_year: { direction: forecasts.half_year?.direction, confidence: forecasts.half_year?.confidence },
       year:      { direction: forecasts.year?.direction,      confidence: forecasts.year?.confidence      },
     },
+    signalScores: signalScores || null, // signal scores at forecast time (Gap 1 learning)
     outcomes: {}, // filled in when checking accuracy
   };
   forecastHistory.unshift(record);
