@@ -784,7 +784,13 @@ async function showTopPick() {
 
     const stocks = marketResults
       .filter(r => r.status === 'fulfilled' && r.value.live?.price)
-      .map(r => r.value);
+      .map(r => r.value)
+      // PENNY STOCK GUARDRAIL: exclude sub-$5 stocks from recommendations
+      // (high slippage + manipulation risk → never a "Top Pick")
+      .filter(s => {
+        const p = parseFloat(s.live?.price);
+        return !isNaN(p) && p >= 5;
+      });
 
     if (stocks.length === 0) throw new Error('Could not fetch market data');
 
@@ -4071,6 +4077,7 @@ async function runAnalysis(sym) {
     applyHistoricalCalibration(parsed);        // Learn from past forecasts
     weeklyTrendAdjustment(parsed, liveData);   // 20-week SMA primary-trend penalty
     calculatePositionSize(parsed, liveData, spyRegime); // Position size (regime-scaled)
+    pennyStockCircuitBreaker(parsed, liveData); // PENNY GUARDRAIL — runs last, caps stick
     // Record this forecast for future calibration
     if (liveData?.price) {
       // Snapshot signal scores at forecast time for per-signal learning (Gap 1)
@@ -4300,8 +4307,19 @@ function renderAnalysis(ticker, d) {
       </div>
     </div>` : '';
 
+  // PENNY STOCK warning badge (most critical — shown first, bright red)
+  const pennyBadge = d._pennyStock ? `
+    <div style="background:linear-gradient(135deg,rgba(255,90,90,.22),rgba(200,30,30,.22));border:2px solid var(--red);border-radius:10px;padding:12px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:20px;">⚠️</span>
+      <div>
+        <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--red);">${langMode==='he'?'זוהתה מניית אגורה':'PENNY STOCK DETECTED'}</div>
+        <div style="font-size:10px;color:var(--t2);margin-top:2px;">${langMode==='he'?('סיכון גבוה להחלקה ומניפולציה (מחיר $' + (d._pennyPrice!=null?d._pennyPrice.toFixed(2):'<5') + '). ביטחון הוגבל ל-30% וגודל פוזיציה אופס.'):('HIGH SLIPPAGE & MANIPULATION RISK ($' + (d._pennyPrice!=null?d._pennyPrice.toFixed(2):'<5') + '). Confidence capped at 30%, position forced to 0%.')}</div>
+      </div>
+    </div>` : '';
+
   document.getElementById('analyzeContent').innerHTML = `
   <div class="panel">
+    ${pennyBadge}
     ${earningsBadge}
     ${concentrationBadge}
     ${scratchpadHTML}
@@ -6278,6 +6296,37 @@ function renderScanner(data, riskLevel) {
 
 // ── Position Sizing (Risk-Adjusted) ───────────────────────────
 // Suggests position size as % of portfolio based on Kelly Criterion + risk factors
+// === Penny Stock Circuit Breaker ===
+// Sub-$5 stocks carry extreme slippage + manipulation risk. When one is analyzed,
+// we hard-cap confidence at 30%, flag a warning badge, and zero out position size.
+// This overrides any optimistic technicals or AI verdict — capital protection first.
+function pennyStockCircuitBreaker(parsed, liveData) {
+  if (!parsed?.forecasts) return parsed;
+  const price = parseFloat(liveData?.price);
+  if (isNaN(price) || price >= 5) return parsed; // not a penny stock
+
+  parsed._pennyStock = true;
+  parsed._pennyPrice = price;
+
+  // 1. Hard-cap every timeframe's confidence at 30%
+  for (const tf of Object.keys(parsed.forecasts)) {
+    const f = parsed.forecasts[tf];
+    if (!f) continue;
+    if (f.confidence != null && f.confidence > 30) {
+      f._penny_capped_from = f.confidence;
+      f.confidence = 30;
+    }
+    // 3. Force position size to 0 (set here; calculatePositionSize also respects the flag)
+    f.position_size_pct = '0';
+    f.position_recommendation = 'AVOID';
+    f.position_penny_note = true;
+  }
+  // Also cap the overall confidence label if present
+  if (parsed.confidence_score != null && parsed.confidence_score > 30) parsed.confidence_score = 30;
+
+  return parsed;
+}
+
 // === Weekly 20-SMA Trend Confluence ===
 // The 20-week SMA (~100 trading days) is a widely-watched primary trend gauge.
 // Price below it = bearish primary trend. We penalize short-term bullish confidence
@@ -6313,6 +6362,10 @@ function calculatePositionSize(parsed, liveData, spyRegime) {
   // Market regime multiplier: in a bearish broad market (SPY < 200-SMA),
   // cut all position sizes by 50% to protect capital (risk management).
   const regimeMult = (spyRegime && spyRegime.regime === 'bearish') ? 0.5 : 1.0;
+
+  // Penny stock: force zero position regardless of other signals
+  const pennyPrice = parseFloat(liveData?.price);
+  const isPenny = !isNaN(pennyPrice) && pennyPrice < 5;
 
   // Earnings binary-event buffer: within 7 days of earnings, cut position 75%
   // to avoid gambling on an unpredictable binary corporate event.
@@ -6365,6 +6418,8 @@ function calculatePositionSize(parsed, liveData, spyRegime) {
     positionSize *= earningsMult;
     // Apply weekly-trend buffer (below 20-week SMA → cut 40%)
     positionSize *= weeklyTrendMult;
+    // Penny stock → force zero position (capital protection)
+    if (isPenny) positionSize = 0;
 
     // Cap at 10% per position (safety)
     positionSize = Math.min(0.10, positionSize);
