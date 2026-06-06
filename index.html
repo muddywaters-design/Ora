@@ -2121,6 +2121,16 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
       const headlines = fhData.fhNews.headlines.slice(0, 3).map(h => h.headline).join(' | ');
       parts.push('RecentNews(' + fhData.fhNews.count + '):' + headlines);
     }
+    // Finnhub news-sentiment metrics (buzz + bullish percent) — real data, if available
+    if (fhData.fhSentiment) {
+      const s = fhData.fhSentiment;
+      const bits = [];
+      if (s.bullishPercent != null) bits.push('bullish:' + Math.round(s.bullishPercent*100) + '%');
+      if (s.buzz != null) bits.push('buzz:' + s.buzz.toFixed(2));
+      if (s.companyScore != null) bits.push('newsScore:' + s.companyScore.toFixed(2));
+      if (s.articlesWeek != null) bits.push(s.articlesWeek + ' articles/wk');
+      if (bits.length) parts.push('NewsSentiment(' + bits.join(',') + ')');
+    }
     // Insider activity
     if (fhData.fhInsider) {
       const i = fhData.fhInsider;
@@ -2527,6 +2537,26 @@ async function fetchSECFinancials(ticker) {
 // ── Finnhub Extended Data (free tier endpoints) ──────────────
 // News, analyst ratings, earnings, insider — all real data
 
+async function fetchFinnhubSentiment(ticker) {
+  if (!finnhubKey) return null;
+  try {
+    const url = `https://finnhub.io/api/v1/news-sentiment?symbol=${ticker}&token=${finnhubKey}`;
+    const r = await fetch(url, {signal: AbortSignal.timeout(6000)});
+    // This endpoint is premium-gated on some accounts → 401/403. Fail gracefully.
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (!data || (data.buzz == null && data.sentiment == null)) return null;
+    return {
+      buzz: data.buzz?.buzz ?? null,                          // 0-1 relative article volume
+      articlesWeek: data.buzz?.articlesInLastWeek ?? null,
+      companyScore: data.companyNewsScore ?? null,            // 0-1 overall news score
+      bullishPercent: data.sentiment?.bullishPercent ?? null, // 0-1
+      bearishPercent: data.sentiment?.bearishPercent ?? null,
+      sectorBullish: data.sectorAverageBullishPercent ?? null,
+    };
+  } catch(_) { return null; }
+}
+
 async function fetchFinnhubNews(ticker) {
   if (!finnhubKey) return null;
   try {
@@ -2619,10 +2649,10 @@ function showFinnhubSetup() {
         <button onclick="document.getElementById('finnhubModal').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:18px;">✕</button>
       </div>
       <div style="font-size:12px;color:var(--t2);line-height:1.6;margin-bottom:14px;">
-        Free fallback for live stock prices when Yahoo Finance proxies fail.
+        Free fallback for live stock prices when Yahoo Finance proxies fail — now also powers real news, analysts, insider activity & news-sentiment (buzz + bullish %).
         <ul style="padding-left:18px;margin:8px 0;">
           <li>60 requests/minute free</li>
-          <li>Real-time US stock prices</li>
+          <li>Real-time US prices + news sentiment</li>
           <li>No credit card required</li>
         </ul>
         <div style="margin-top:10px;">
@@ -2714,6 +2744,45 @@ async function fetchFinnhubPrice(ticker) {
 }
 
 // ── Macro Data (VIX, Treasury yields, DXY) ────────────────────
+// === Market Regime Filter: SPY vs 200-day SMA ===
+// Fetches ~300 days of SPY history and determines if the broad market is in a
+// bullish (SPY > 200-SMA) or bearish (SPY < 200-SMA) regime. Used to scale risk:
+// in a bearish market, position sizes are automatically cut to protect capital.
+// Cached 4h (this changes slowly) and reused across all tickers.
+async function fetchSPYRegime() {
+  return cachedFetch('spy_regime', async () => {
+    try {
+      const url = 'https://query1.finance.yahoo.com/v8/finance/chart/SPY?range=300d&interval=1d';
+      const proxies = [
+        'https://corsproxy.io/?url=',
+        'https://api.allorigins.win/raw?url=',
+        'https://thingproxy.freeboard.io/fetch/',
+      ];
+      let data = null;
+      for (const proxy of proxies) {
+        try {
+          const r = await fetch(proxy + encodeURIComponent(url), { signal: AbortSignal.timeout(6000), headers: {'User-Agent':'Mozilla/5.0'} });
+          if (r.ok) { data = await r.json(); break; }
+        } catch(_) {}
+      }
+      const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x => x != null) || [];
+      if (closes.length < 200) return null;
+      const price = closes[closes.length - 1];
+      const sma200 = closes.slice(-200).reduce((a,b)=>a+b,0) / 200;
+      const sma50 = closes.length >= 50 ? closes.slice(-50).reduce((a,b)=>a+b,0) / 50 : null;
+      const distPct = ((price - sma200) / sma200) * 100;
+      return {
+        regime: price > sma200 ? 'bullish' : 'bearish',
+        spyPrice: price,
+        sma200,
+        sma50,
+        distPct,
+        goldenCross: sma50 ? sma50 > sma200 : null,
+      };
+    } catch(_) { return null; }
+  });
+}
+
 async function fetchMacroData() {
   const symbols = {
     vix:  '%5EVIX',   // VIX volatility index
@@ -3720,7 +3789,7 @@ async function runAnalysis(sym) {
   try {
     // Fetch all data sources in parallel with hard 6s cap
     const [liveData, insiderData, trendsData, shortData, optionsData, macroData,
-           fhNews, fhAnalysts, fhInsider, fhFinancials, secData] = await Promise.all([
+           fhNews, fhAnalysts, fhInsider, fhFinancials, secData, fhSentiment] = await Promise.all([
       withTimeout(fetchLivePrice(t),      6000),
       withTimeout(fetchInsiderTrading(t), 4000),
       withTimeout(fetchGoogleTrends(t),   4000),
@@ -3734,6 +3803,7 @@ async function runAnalysis(sym) {
       // Fundamental financials (real reports)
       finnhubKey ? withTimeout(cachedFetch('fin_' + t, () => fetchFinnhubFinancials(t)), 6000) : Promise.resolve(null),
       withTimeout(cachedFetch('sec_' + t, () => fetchSECFinancials(t)), 9000),
+      finnhubKey ? withTimeout(fetchFinnhubSentiment(t), 5000) : Promise.resolve(null),
     ]);
     // Steps 1+2 done after data fetch
     if(window._advanceStep) { window._advanceStep(); window._advanceStep(); }
@@ -3803,7 +3873,7 @@ async function runAnalysis(sym) {
     // Live data status — only show warning AFTER analysis, not during loading
     // (The post-analysis warning handles this if needed)
     if(window._advanceStep) window._advanceStep(); // Step: Running AI
-    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData, {fhNews, fhAnalysts, fhInsider, fhFinancials, secData}), useWebSearch);
+    const raw = await toJSONEnsemble(mkSinglePrompt(t, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData, {fhNews, fhAnalysts, fhInsider, fhFinancials, secData, fhSentiment}), useWebSearch);
     if(window._advanceStep) window._advanceStep(); // Step: Building report
     const parsed = extractJSON(raw);
     if (fgData) parsed._fg = fgData;
@@ -3891,6 +3961,9 @@ async function runAnalysis(sym) {
       parsed.live_trends_change  = trendsData.trend_change;
       parsed.live_trends_current = trendsData.current_interest;
     }
+    // Fetch broad-market regime (SPY vs 200-SMA) for risk scaling
+    const spyRegime = await fetchSPYRegime().catch(() => null);
+    parsed._spyRegime = spyRegime;
     // Auto-calibrate confidence based on data signal agreement
     // Apply intelligence layer (order matters!)
     sanityCheckForecast(parsed, liveData);     // Cap unrealistic ranges
@@ -3900,7 +3973,7 @@ async function runAnalysis(sym) {
     crossTimeframeCheck(parsed);               // MTF agreement check
     calibrateConfidence(parsed, liveData);     // Signal consensus calibration
     applyHistoricalCalibration(parsed);        // Learn from past forecasts
-    calculatePositionSize(parsed, liveData);   // Suggest position size
+    calculatePositionSize(parsed, liveData, spyRegime); // Position size (regime-scaled)
     // Record this forecast for future calibration
     if (liveData?.price) {
       // Snapshot signal scores at forecast time for per-signal learning (Gap 1)
@@ -3943,6 +4016,7 @@ async function runAnalysis(sym) {
       }
     } catch(_) {}
     parsed._fhNews = fhNews;
+    parsed._fhSentiment = fhSentiment;
     parsed._fhAnalysts = fhAnalysts;
     parsed._fhInsider = fhInsider;
     parsed._fhFinancials = fhFinancials;
@@ -4391,8 +4465,24 @@ function renderAnalysis(ticker, d) {
           '<div style="font-size:9px;color:var(--t3);font-family:var(--mono);">' + h.source + ' · ' + h.date + '</div>' +
         '</div>'
       ).join('');
+      // Finnhub news-sentiment summary (if available)
+      let sentBar = '';
+      if (d._fhSentiment && d._fhSentiment.bullishPercent != null) {
+        const s = d._fhSentiment;
+        const bp = Math.round(s.bullishPercent * 100);
+        const sColor = bp >= 60 ? 'var(--green)' : bp >= 40 ? 'var(--yellow)' : 'var(--red)';
+        const he = langMode === 'he';
+        sentBar = '<div style="padding:8px;background:rgba(255,255,255,.03);border-radius:7px;margin-bottom:10px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+            '<span style="font-size:10px;color:var(--t2);">' + (he?'סנטימנט חדשות':'News Sentiment') + '</span>' +
+            '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + sColor + ';">' + bp + '% ' + (he?'חיובי':'bullish') + '</span>' +
+          '</div>' +
+          (s.buzz != null ? '<div style="font-size:9px;color:var(--t3);margin-top:2px;">buzz ' + s.buzz.toFixed(2) + (s.articlesWeek?' · ' + s.articlesWeek + ' articles/wk':'') + '</div>' : '') +
+        '</div>';
+      }
       return '<div class="card"><div class="ch">📰 ' + (langMode==='he'?'חדשות אחרונות':'Latest News') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
         '<div class="cb">' +
+          sentBar +
           '<div style="font-size:10px;color:var(--t3);margin-bottom:8px;">' + news.count + ' articles in last 7 days</div>' +
           items +
         '</div></div>';
@@ -4432,8 +4522,21 @@ function renderAnalysis(ticker, d) {
       const tnxI = m.tnx ? (m.tnx > 4.5 ? {text:langMode==='he'?'תשואה גבוהה':'high yield',color:'var(--red)'} : m.tnx < 3.5 ? {text:langMode==='he'?'תשואה נמוכה':'low yield',color:'var(--green)'} : {text:'moderate',color:'var(--t3)'}) : null;
       const dxyI = m.dxy ? (m.dxy > 106 ? {text:langMode==='he'?'דולר חזק':'strong $',color:'var(--yellow)'} : m.dxy < 100 ? {text:langMode==='he'?'דולר חלש':'weak $',color:'var(--green)'} : {text:'stable',color:'var(--t3)'}) : null;
       const spyI = m.spy5d != null ? {text:(m.spy5d>=0?'+':'')+m.spy5d.toFixed(1)+'% 5d',color:m.spy5d>=0?'var(--green)':'var(--red)'} : null;
+      const he2 = langMode === 'he';
+      let spyRow = '';
+      if (d._spyRegime) {
+        const sr = d._spyRegime;
+        const isBull = sr.regime === 'bullish';
+        const srColor = isBull ? 'var(--green)' : 'var(--red)';
+        const srLabel = isBull ? (he2?'שורי':'BULLISH') : (he2?'דובי':'BEARISH');
+        spyRow = '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:rgba(255,255,255,.03);border-radius:7px;border-left:3px solid ' + srColor + ';margin-bottom:8px;">' +
+          '<span style="font-size:10px;color:var(--t2);">' + (he2?'משטר שוק (SPY מול 200-SMA)':'Market Regime (SPY vs 200-SMA)') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + srColor + ';">' + srLabel + ' · ' + (sr.distPct>=0?'+':'') + sr.distPct.toFixed(1) + '%</span>' +
+        '</div>' +
+        (!isBull ? '<div style="font-size:9px;color:var(--orange);margin-bottom:8px;">⚠️ ' + (he2?'שוק דובי — גדלי הפוזיציות קוצצו ב-50% להגנה':'Bearish market — position sizes cut 50% for protection') + '</div>' : '');
+      }
       return '<div class="card"><div class="ch">🌡️ ' + (langMode==='he'?'משטר מאקרו':'Macro Regime') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
-        '<div class="cb">' +
+        '<div class="cb">' + spyRow + +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
             '<span style="font-size:11px;color:var(--t3);">' + (langMode==='he'?'סביבת שוק כללית':'Overall market environment') + '</span>' +
             '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + regimeColor + ';text-transform:uppercase;">' + regimeLabel + '</span>' +
@@ -4770,6 +4873,63 @@ function computeSignalAccuracy() {
   return result;
 }
 
+// === Walk-Forward Technical-vs-Sentiment Weighting (Brier-based) ===
+// Splits signals into TECHNICAL (rsi/macd/volume) and SENTIMENT (wsb/mood/analyst),
+// measures which group predicted direction better over recent evaluated forecasts,
+// and returns a weight tilt. Replaces a static 50/50 assumption with performance-based
+// weighting. Activates only with enough sample (>=8 evaluated) to avoid over-fitting.
+function computeTechVsSentimentWeights() {
+  const TECH = ['rsi', 'macd', 'volume'];
+  const SENT = ['analyst']; // analyst target is the sentiment-ish signal we snapshot
+  // Use last 10 evaluated forecasts with signal snapshots
+  const evaluated = forecastHistory
+    .filter(r => r.signalScores && (r.outcomes?.week?.actualChange != null))
+    .slice(0, 10);
+
+  if (evaluated.length < 8) {
+    return { ready: false, sample: evaluated.length, techWeight: 1.0, sentWeight: 1.0 };
+  }
+
+  // Brier per group: for each forecast, group score = avg of that group's signal scores.
+  // Brier contribution = (groupProb - outcome)^2, outcome = 1 if stock rose else 0.
+  const brierFor = (group) => {
+    const pairs = [];
+    evaluated.forEach(r => {
+      const scores = group.map(s => r.signalScores[s]).filter(v => v != null);
+      if (scores.length === 0) return;
+      const groupProb = scores.reduce((a,b)=>a+b,0) / scores.length; // 0-1
+      const outcome = r.outcomes.week.actualChange > 0 ? 1 : 0;
+      pairs.push((groupProb - outcome) ** 2);
+    });
+    return pairs.length ? pairs.reduce((a,b)=>a+b,0) / pairs.length : null;
+  };
+
+  const techBrier = brierFor(TECH);
+  const sentBrier = brierFor(SENT);
+  if (techBrier == null || sentBrier == null) {
+    return { ready: false, sample: evaluated.length, techWeight: 1.0, sentWeight: 1.0 };
+  }
+
+  // Lower Brier = better. Convert to weights: the better group gets more weight.
+  // Weight inversely proportional to error, normalized around 1.0, clamped to [0.6, 1.4].
+  const techErr = Math.max(0.01, techBrier);
+  const sentErr = Math.max(0.01, sentBrier);
+  const total = techErr + sentErr;
+  let techW = (sentErr / total) * 2; // if tech has lower err, sentErr/total > 0.5 → techW > 1
+  let sentW = (techErr / total) * 2;
+  techW = Math.max(0.6, Math.min(1.4, techW));
+  sentW = Math.max(0.6, Math.min(1.4, sentW));
+
+  return {
+    ready: true,
+    sample: evaluated.length,
+    techBrier, sentBrier,
+    techWeight: techW,
+    sentWeight: sentW,
+    favored: techBrier < sentBrier ? 'technical' : 'sentiment',
+  };
+}
+
 // === Professional Statistical Metrics (#4) ===
 // Computed from forecastHistory outcomes. All pure client-side math.
 function computeProMetrics(results) {
@@ -4986,6 +5146,36 @@ function renderAccDashboard(results) {
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">' + (he2?'🎯 דיוק לפי סיגנל':'🎯 Per-Signal Accuracy') + '</div>' +
           bars +
           '<div style="font-size:8px;color:var(--t3);margin-top:6px;font-style:italic;">' + (he2?'שיעור פגיעה = כמה פעמים הסיגנל ניבא נכון את הכיוון. החץ = משקל מומלץ.':'Hit rate = how often this signal predicted direction correctly. Arrow = suggested weight from its track record.') + '</div>' +
+        '</div>';
+      })()}
+
+      ${(() => {
+        // Technical-vs-Sentiment walk-forward weighting (Brier-based)
+        const tvs = computeTechVsSentimentWeights();
+        const he3 = (typeof langMode !== 'undefined' && langMode === 'he');
+        if (!tvs.ready) {
+          return '<div style="padding:4px 16px 14px;">' +
+            '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">' + (he3?'⚖️ טכני מול סנטימנט':'⚖️ Technical vs Sentiment') + '</div>' +
+            '<div style="font-size:9px;color:var(--t3);font-style:italic;">' + (he3?('צריך 8+ תחזיות מאומתות (יש ' + tvs.sample + '). יופעל אוטומטית כשייצבר מספיק מידע.'):('Needs 8+ evaluated forecasts (have ' + tvs.sample + '). Activates automatically once enough data accumulates.')) + '</div>' +
+          '</div>';
+        }
+        const favColor = tvs.favored === 'technical' ? 'var(--blue)' : 'var(--purple)';
+        const favLabel = tvs.favored === 'technical' ? (he3?'טכני':'Technical') : (he3?'סנטימנט':'Sentiment');
+        return '<div style="padding:4px 16px 14px;">' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">' + (he3?'⚖️ טכני מול סנטימנט (Brier אחרון)':'⚖️ Technical vs Sentiment (recent Brier)') + '</div>' +
+          '<div style="display:flex;gap:8px;">' +
+            '<div style="flex:1;padding:10px;background:var(--bg);border-radius:8px;text-align:center;">' +
+              '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);">' + (he3?'טכני':'Technical') + '</div>' +
+              '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--blue);">×' + tvs.techWeight.toFixed(2) + '</div>' +
+              '<div style="font-size:8px;color:var(--t3);">Brier ' + tvs.techBrier.toFixed(2) + '</div>' +
+            '</div>' +
+            '<div style="flex:1;padding:10px;background:var(--bg);border-radius:8px;text-align:center;">' +
+              '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);">' + (he3?'סנטימנט':'Sentiment') + '</div>' +
+              '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--purple);">×' + tvs.sentWeight.toFixed(2) + '</div>' +
+              '<div style="font-size:8px;color:var(--t3);">Brier ' + tvs.sentBrier.toFixed(2) + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div style="font-size:8px;color:' + favColor + ';margin-top:6px;">' + (he3?'מוביל לאחרונה: ':'Recently more accurate: ') + favLabel + '</div>' +
         '</div>';
       })()}
 
@@ -5922,8 +6112,12 @@ function renderScanner(data, riskLevel) {
 
 // ── Position Sizing (Risk-Adjusted) ───────────────────────────
 // Suggests position size as % of portfolio based on Kelly Criterion + risk factors
-function calculatePositionSize(parsed, liveData) {
+function calculatePositionSize(parsed, liveData, spyRegime) {
   if (!parsed?.forecasts) return parsed;
+
+  // Market regime multiplier: in a bearish broad market (SPY < 200-SMA),
+  // cut all position sizes by 50% to protect capital (risk management).
+  const regimeMult = (spyRegime && spyRegime.regime === 'bearish') ? 0.5 : 1.0;
 
   for (const tf of Object.keys(parsed.forecasts)) {
     const f = parsed.forecasts[tf];
@@ -5963,6 +6157,9 @@ function calculatePositionSize(parsed, liveData) {
     if (conf < 55) positionSize *= 0.5;
     else if (conf < 65) positionSize *= 0.75;
 
+    // Apply market-regime multiplier (bearish market → halve position)
+    positionSize *= regimeMult;
+
     // Cap at 10% per position (safety)
     positionSize = Math.min(0.10, positionSize);
 
@@ -5971,6 +6168,7 @@ function calculatePositionSize(parsed, liveData) {
       f.position_recommendation = positionSize >= 0.07 ? 'Strong' :
                                   positionSize >= 0.04 ? 'Standard' :
                                   positionSize >= 0.02 ? 'Small' : 'Minimal';
+      if (regimeMult < 1) f.position_regime_note = 'bearish';
     } else {
       f.position_size_pct = '0';
       f.position_recommendation = 'AVOID';
