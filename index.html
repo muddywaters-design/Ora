@@ -79,6 +79,20 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
 .content::-webkit-scrollbar{width:4px;}
 .content::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
 .panel{padding:18px;display:flex;flex-direction:column;gap:14px;max-width:960px;margin:0 auto;}
+/* Traffic-light ambient status glow on the analysis panel */
+.panel-status{border-radius:16px;transition:box-shadow .5s ease, border-color .5s ease;}
+.panel-status.status-bull{box-shadow:0 0 0 1px rgba(57,217,138,.35), 0 0 32px -8px rgba(57,217,138,.45);}
+.panel-status.status-risk{box-shadow:0 0 0 1px rgba(255,90,90,.4), 0 0 32px -8px rgba(255,90,90,.45);}
+.panel-status.status-neutral{box-shadow:none;}
+/* Skeleton loader shimmer */
+@keyframes skPulse{0%{opacity:.45;}50%{opacity:.9;}100%{opacity:.45;}}
+.sk{background:linear-gradient(90deg,var(--s2),var(--b2),var(--s2));border-radius:7px;animation:skPulse 1.3s ease-in-out infinite;}
+.sk-line{height:11px;margin:7px 0;}
+.sk-box{border-radius:12px;}
+/* Copy button + tooltip */
+.copy-btn{background:var(--s2);border:1px solid var(--b2);color:var(--t2);border-radius:6px;padding:3px 8px;font-family:var(--mono);font-size:10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;}
+.copy-btn:hover{border-color:var(--green);color:var(--green);}
+.copy-btn.copied{background:var(--green);color:var(--bg);border-color:var(--green);}
 
 /* States */
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:12px;color:var(--t3);text-align:center;padding:32px;}
@@ -754,6 +768,12 @@ async function showTopPick() {
       </div>
       <div id="tpStatus" style="font-size:11px;color:var(--t2);font-family:var(--mono);">Step 1/4: Fetching WSB trending stocks…</div>
       <div style="font-size:9px;color:var(--t3);margin-top:6px;">Checking 7 signals: WSB · Volume · RSI · MACD · Sector · Analysts · Macro</div>
+    </div>
+    <!-- Skeleton preview of the ranked results -->
+    <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">
+      <div class="sk sk-box" style="height:72px;"></div>
+      <div class="sk sk-box" style="height:48px;opacity:.8;"></div>
+      <div class="sk sk-box" style="height:48px;opacity:.6;"></div>
     </div>`;
   container.insertBefore(progress, container.firstChild);
 
@@ -1369,6 +1389,38 @@ function updateMarketClock() {
 // Start the clock — update every second
 updateMarketClock();
 setInterval(updateMarketClock, 1000);
+
+// === Power-user keyboard shortcuts ===
+// "/" focuses the ticker search; "Escape" clears/unfocuses or resets the analysis view.
+document.addEventListener('keydown', function(e) {
+  const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+  const typing = tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable);
+
+  // "/" → focus ticker search (unless already typing in a field)
+  if (e.key === '/' && !typing) {
+    const input = document.getElementById('tickerInput');
+    if (input) {
+      e.preventDefault();          // stop the "/" from being typed / browser quick-find
+      input.focus();
+      input.select();
+    }
+    return;
+  }
+
+  // Escape → clear + blur the ticker input (works even while typing in it)
+  if (e.key === 'Escape') {
+    const input = document.getElementById('tickerInput');
+    if (input && (document.activeElement === input || input.value)) {
+      input.value = '';
+      input.blur();
+      e.preventDefault();
+      return;
+    }
+    // If a modal is open, Escape closes it (modals self-manage; this is a fallback)
+    const modal = document.querySelector('[id$="Modal"]');
+    if (modal && modal.parentNode) { try { modal.remove(); } catch(_) {} }
+  }
+});
 
 // === Quick Buy Decision ===
 async function quickDecision() {
@@ -4208,6 +4260,27 @@ function showAnalyzeLoading(ticker, steps) {
       <div style="font-size:10px;color:var(--t3);margin-top:10px;text-align:center;line-height:1.6;">
         Analysis takes ~15-20s · Live data + AI forecast
       </div>
+    </div>
+    <!-- Skeleton wireframe of the incoming report -->
+    <div style="max-width:960px;margin:8px auto 0;padding:0 18px;">
+      <div class="sk sk-box" style="height:64px;margin-bottom:12px;"></div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
+        <div class="sk sk-box" style="height:90px;"></div>
+        <div class="sk sk-box" style="height:90px;"></div>
+        <div class="sk sk-box" style="height:90px;"></div>
+        <div class="sk sk-box" style="height:90px;"></div>
+      </div>
+      <div class="sk sk-box" style="height:52px;margin-bottom:12px;"></div>
+      <div style="padding:14px;border:1px solid var(--b1);border-radius:12px;margin-bottom:12px;">
+        <div class="sk sk-line" style="width:40%;"></div>
+        <div class="sk sk-line" style="width:90%;"></div>
+        <div class="sk sk-line" style="width:75%;"></div>
+        <div class="sk sk-line" style="width:85%;"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div class="sk sk-box" style="height:110px;"></div>
+        <div class="sk sk-box" style="height:110px;"></div>
+      </div>
     </div>`;
   const start = Date.now();
   clearInterval(window._elapsedInterval);
@@ -4219,6 +4292,40 @@ function showAnalyzeLoading(ticker, steps) {
 }
 
 // ── Render: Analysis ───────────────────────────────────────────
+// === One-click trade copy (clipboard) ===
+// Copies a broker-ready execution string and shows a transient "Copied!" confirmation.
+function copyTrade(btn, ticker, pct, price) {
+  try {
+    const p = parseFloat(price);
+    const pctNum = parseFloat(pct);
+    let text;
+    if (!isNaN(p) && p > 0 && !isNaN(pctNum) && pctNum > 0) {
+      // Estimate shares for a hypothetical $10,000 account (user can scale)
+      const dollars = 10000 * (pctNum / 100);
+      const shares = Math.max(1, Math.floor(dollars / p));
+      text = 'Buy ' + shares + ' shares of ' + ticker + ' (~$' + dollars.toFixed(0) + ' @ $' + p.toFixed(2) + ')';
+    } else {
+      text = ticker + ' — ' + (pct || '0') + '% suggested position';
+    }
+    const done = () => {
+      const orig = btn.innerHTML;
+      btn.classList.add('copied');
+      btn.innerHTML = '✓ ' + (langMode==='he'?'הועתק':'Copied');
+      setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = orig; }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => {
+        // Fallback for older/locked clipboard
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+        ta.select(); try { document.execCommand('copy'); } catch(_) {} document.body.removeChild(ta); done();
+      });
+    } else {
+      const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+      ta.select(); try { document.execCommand('copy'); } catch(_) {} document.body.removeChild(ta); done();
+    }
+  } catch(_) {}
+}
+
 function renderAnalysis(ticker, d) {
   const sc = sc2cls(d.overall_signal);
   const fs = d.forecasts || {};
@@ -4280,7 +4387,10 @@ function renderAnalysis(ticker, d) {
       })()}
       ${f.position_size_pct && f.position_size_pct !== '0' ? `<div style="margin-top:8px;padding:6px 8px;background:${f.position_recommendation==='Strong'?'rgba(57,217,138,.1)':f.position_recommendation==='AVOID'?'rgba(255,68,102,.1)':'rgba(77,168,255,.08)'};border-radius:6px;border:1px solid ${f.position_recommendation==='Strong'?'rgba(57,217,138,.3)':f.position_recommendation==='AVOID'?'rgba(255,68,102,.3)':'rgba(77,168,255,.2)'};display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);">
         <span style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">${tr('Suggested Size')}</span>
-        <span style="font-size:12px;font-weight:700;color:${f.position_recommendation==='Strong'?'var(--green)':f.position_recommendation==='AVOID'?'var(--red)':'var(--blue)'};">${f.position_size_pct}% · ${tr(f.position_recommendation)}</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;font-weight:700;color:${f.position_recommendation==='Strong'?'var(--green)':f.position_recommendation==='AVOID'?'var(--red)':'var(--blue)'};">${f.position_size_pct}% · ${tr(f.position_recommendation)}</span>
+          <button class="copy-btn" onclick="copyTrade(this, '${ticker}', '${f.position_size_pct}', '${(d.current_price||'').toString().replace(/[^0-9.]/g,'')}')" title="${langMode==='he'?'העתק פקודת מסחר':'Copy trade order'}">📋</button>
+        </span>
       </div>` : (f.position_recommendation === 'AVOID' ? `<div style="margin-top:8px;padding:6px 8px;background:rgba(255,68,102,.1);border-radius:6px;border:1px solid rgba(255,68,102,.3);font-family:var(--mono);font-size:11px;color:var(--red);text-align:center;font-weight:700;">⛔ AVOID — Negative expectancy</div>` : '')}
       ${f.ensemble_agreement ? `<div style="font-family:var(--mono);font-size:8px;color:var(--blue);margin-top:4px;">🔀 ${f.ensemble_agreement}</div>` : ''}
       ${f.bull_case ? `<div style="margin-top:6px;padding:6px 8px;background:rgba(0,229,160,.06);border-radius:6px;border-left:2px solid var(--green);">
@@ -4343,6 +4453,12 @@ function renderAnalysis(ticker, d) {
       </div>
     </div>` : '';
 
+  // Traffic-light status: derive from primary (week) confidence + penny flag
+  const _wkConf = d.forecasts?.week?.confidence ?? d.forecasts?.month?.confidence ?? d.confidence_score ?? 50;
+  const _statusClass = d._pennyStock ? 'status-risk'
+                     : (_wkConf > 70 ? 'status-bull'
+                     : (_wkConf < 40 ? 'status-risk' : 'status-neutral'));
+
   // PENNY STOCK warning badge (most critical — shown first, bright red)
   const pennyBadge = d._pennyStock ? `
     <div style="background:linear-gradient(135deg,rgba(255,90,90,.22),rgba(200,30,30,.22));border:2px solid var(--red);border-radius:10px;padding:12px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
@@ -4354,7 +4470,7 @@ function renderAnalysis(ticker, d) {
     </div>` : '';
 
   document.getElementById('analyzeContent').innerHTML = `
-  <div class="panel">
+  <div class="panel panel-status ${_statusClass}">
     ${pennyBadge}
     ${earningsBadge}
     ${concentrationBadge}
