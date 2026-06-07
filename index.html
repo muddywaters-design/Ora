@@ -424,7 +424,7 @@ body.lang-he .fc-tf {
       style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px;font-family:var(--mono);font-size:10px;cursor:pointer;border-radius:8px;transition:all .15s;letter-spacing:.03em;"
       onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'"
       onmouseout="this.style.borderColor='var(--b2)';this.style.color='var(--t2)'">
-      🚀 WSB Hot — Last 48h
+      🚀 WSB Hot — Last 24h
     </button>
     <button onclick="showScanner()"
       style="background:linear-gradient(135deg,var(--green),var(--blue));color:var(--bg);border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;"
@@ -483,7 +483,7 @@ body.lang-he .fc-tf {
             <div><span style="font-size:13px;">▶️</span> <b id="lg-run">RUN</b> — <span id="lg-run-d">Full deep analysis of one stock: forecasts, signals, fundamentals & outlook</span></div>
             <div><span style="font-size:13px;">💰</span> <b id="lg-quick">Quick Decision</b> — <span id="lg-quick-d">Fast Buy/Wait/Skip verdict for one stock with entry, stop & target</span></div>
             <div><span style="font-size:13px;">🏆</span> <b id="lg-top">Top Pick Today</b> — <span id="lg-top-d">Scans trending stocks for the one with the most bullish signals aligned</span></div>
-            <div><span style="font-size:13px;">🚀</span> <b id="lg-wsb">WSB Hot</b> — <span id="lg-wsb-d">Most-discussed stocks on Reddit WallStreetBets in the last 48h</span></div>
+            <div><span style="font-size:13px;">🚀</span> <b id="lg-wsb">WSB Hot</b> — <span id="lg-wsb-d">Most-discussed stocks on Reddit WallStreetBets in the last 24h</span></div>
             <div><span style="font-size:13px;">⚡</span> <b id="lg-opp">Opportunity Scanner</b> — <span id="lg-opp-d">Finds stocks showing early signs of a potential move</span></div>
             <div><span style="font-size:13px;">🎯</span> <b id="lg-sent">Sentiment Consensus</b> — <span id="lg-sent-d">Combines WSB buzz, volume & market mood into one score</span></div>
             <div><span style="font-size:13px;">🎰</span> <b id="lg-penny">Penny Stock Scanner</b> — <span id="lg-penny-d">High-risk speculative picks under $0.004 (gamble territory)</span></div>
@@ -1708,7 +1708,7 @@ function showHelpLegend() {
     run:['הרץ','ניתוח עומק מלא: תחזיות, אותות, נתונים פיננסיים ואופק'],
     quick:['החלטה מהירה','פסיקה קנה/המתן/דלג עם כניסה, סטופ ויעד'],
     top:['בחירת היום','מוצא את המניה עם הכי הרבה אותות חיוביים'],
-    wsb:['WSB חם','המניות הכי מדוברות ב-Reddit ב-48 שעות'],
+    wsb:['WSB חם','המניות הכי מדוברות ב-Reddit ב-24 שעות'],
     opp:['סורק הזדמנויות','מוצא מניות עם סימנים מוקדמים לתנועה'],
     sent:['קונצנזוס סנטימנט','משלב באזז, נפח ומצב רוח שוק'],
     penny:['סורק מניות אגורה','בחירות ספקולטיביות מתחת ל-$0.004'],
@@ -1729,7 +1729,7 @@ function showHelpLegend() {
     run:['RUN','Full deep analysis: forecasts, signals, fundamentals & outlook'],
     quick:['Quick Decision','Fast Buy/Wait/Skip verdict with entry, stop & target'],
     top:['Top Pick Today','Scans trending stocks for the most bullish signals aligned'],
-    wsb:['WSB Hot','Most-discussed stocks on Reddit WallStreetBets in 48h'],
+    wsb:['WSB Hot','Most-discussed stocks on Reddit WallStreetBets in 24h'],
     opp:['Opportunity Scanner','Finds stocks showing early signs of a move'],
     sent:['Sentiment Consensus','Combines WSB buzz, volume & market mood'],
     penny:['Penny Stock Scanner','High-risk speculative picks under $0.004'],
@@ -1783,7 +1783,7 @@ function translateLegend() {
   set('lg-run','RUN','הרץ'); set('lg-run-d','Full deep analysis of one stock: forecasts, signals, fundamentals & outlook','ניתוח עומק מלא של מניה: תחזיות, אותות, נתונים פיננסיים ואופק');
   set('lg-quick','Quick Decision','החלטה מהירה'); set('lg-quick-d','Fast Buy/Wait/Skip verdict for one stock with entry, stop & target','פסיקה מהירה קנה/המתן/דלג עם כניסה, סטופ ויעד');
   set('lg-top','Top Pick Today','בחירת היום'); set('lg-top-d','Scans trending stocks for the one with the most bullish signals aligned','סורק מניות מדוברות ומוצא את זו עם הכי הרבה אותות חיוביים');
-  set('lg-wsb','WSB Hot','WSB חם'); set('lg-wsb-d','Most-discussed stocks on Reddit WallStreetBets in the last 48h','המניות הכי מדוברות ב-Reddit WallStreetBets ב-48 השעות האחרונות');
+  set('lg-wsb','WSB Hot','WSB חם'); set('lg-wsb-d','Most-discussed stocks on Reddit WallStreetBets in the last 24h','המניות הכי מדוברות ב-Reddit WallStreetBets ב-24 השעות האחרונות');
   set('lg-opp','Opportunity Scanner','סורק הזדמנויות'); set('lg-opp-d','Finds stocks showing early signs of a potential move','מוצא מניות עם סימנים מוקדמים לתנועה אפשרית');
   set('lg-sent','Sentiment Consensus','קונצנזוס סנטימנט'); set('lg-sent-d','Combines WSB buzz, volume & market mood into one score','משלב באזז WSB, נפח ומצב רוח שוק לציון אחד');
   set('lg-penny','Penny Stock Scanner','סורק מניות אגורה'); set('lg-penny-d','High-risk speculative picks under $0.004 (gamble territory)','בחירות ספקולטיביות בסיכון גבוה מתחת ל-$0.004 (טריטוריית הימור)');
@@ -2381,7 +2381,7 @@ ${research.slice(0, 1500)}
 
 
 // ── Twelve Data API (technical indicators: RSI, MACD) ────────
-let twelveKey = localStorage.getItem('so_twelve') || '';
+let twelveKey = (localStorage.getItem('so_twelve') || '').trim();
 
 function showTwelveSetup() {
   const existing = document.getElementById('twelveModal');
@@ -2720,7 +2720,7 @@ async function fetchFinnhubInsider(ticker) {
 }
 
 // ── Finnhub API Integration ──────────────────────────────────
-let finnhubKey = localStorage.getItem('so_finnhub') || '';
+let finnhubKey = (localStorage.getItem('so_finnhub') || '').trim();
 
 function showFinnhubSetup() {
   const existing = document.getElementById('finnhubModal');
@@ -6990,12 +6990,12 @@ async function showSentimentConsensus() {
   wrapper.style.cssText = 'padding:14px 14px 0;';
   wrapper.innerHTML = `
     <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:24px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;">
-      <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">🎯 Sentiment Consensus Engine</div>
+      <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">${langMode==='he'?'🎯 מנוע קונצנזוס סנטימנט':'🎯 Sentiment Consensus Engine'}</div>
       <div style="width:200px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;">
         <div style="height:100%;background:linear-gradient(90deg,var(--purple),var(--orange));border-radius:1px;animation:la 1.5s ease-in-out infinite;"></div>
       </div>
-      <div id="consensusStatus" style="font-size:11px;color:var(--t3);font-family:var(--mono);">Gathering real-time signals…</div>
-      <div style="font-size:9px;color:var(--t3);">Fear&amp;Greed + WSB + Volume — all real data</div>
+      <div id="consensusStatus" style="font-size:11px;color:var(--t3);font-family:var(--mono);">${langMode==='he'?'אוסף סיגנלים בזמן אמת…':'Gathering real-time signals…'}</div>
+      <div style="font-size:9px;color:var(--t3);">${langMode==='he'?'פחד&חמדנות + WSB + ווליום — נתונים אמיתיים':'Fear&Greed + WSB + Volume — all real data'}</div>
     </div>`;
   content.insertBefore(wrapper, content.firstChild);
 
@@ -7005,10 +7005,9 @@ async function showSentimentConsensus() {
     const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 
     // === STEP 1: Real Fear & Greed Index ===
-    setStatus('📊 Fetching real Fear & Greed Index…');
+    setStatus(langMode==='he'?'📊 מושך מדד פחד וחמדנות אמיתי…':'📊 Fetching real Fear & Greed Index…');
     let fgData = null;
     try {
-      // Alternative.me has CORS-friendly free F&G index
       const proxies = ['', 'https://corsproxy.io/?', 'https://api.allorigins.win/raw?url='];
       const fgUrl = 'https://api.alternative.me/fng/?limit=1';
       for (const proxy of proxies) {
@@ -7019,18 +7018,13 @@ async function showSentimentConsensus() {
           const data = await r.json();
           const item = data?.data?.[0];
           if (item) {
-            fgData = {
-              score: parseInt(item.value),
-              rating: item.value_classification,
-              source: 'Alternative.me (live)',
-            };
+            fgData = { score: parseInt(item.value), rating: item.value_classification, source: 'Alternative.me (live)' };
             break;
           }
         } catch(_) { continue; }
       }
     } catch(_) {}
 
-    // Fallback to CNN F&G if Alternative.me failed
     if (!fgData) {
       try {
         const cnnUrl = 'https://production.dataviz.cnn.io/index/fearandgreed/graphdata';
@@ -7057,19 +7051,24 @@ async function showSentimentConsensus() {
     if (!fgData) fgData = { score: 50, rating: 'Neutral', source: 'unavailable' };
 
     // === STEP 2: Real WSB data from ApeWisdom ===
-    setStatus('🚀 Fetching real WSB mentions…');
+    setStatus(langMode==='he'?'🚀 מושך אזכורי WSB אמיתיים…':'🚀 Fetching real WSB mentions…');
     const wsbResults = await fetchApeWisdom();
     if (!wsbResults || wsbResults.length === 0) {
-      throw new Error('Could not fetch WSB data from ApeWisdom — try again');
+      throw new Error(langMode==='he'?'לא ניתן למשוך נתוני WSB מ-ApeWisdom — נסה שוב':'Could not fetch WSB data from ApeWisdom — try again');
     }
 
-    // Take top 5 by mentions
-    const top5 = wsbResults.slice(0, 5);
+    // UPGRADE 2: Strict ETF / index / crypto exclusion so macro names don't choke the leaderboard.
+    // (fetchApeWisdom already strips common ETFs; this is a second, explicit guard for this view.)
+    const EXCLUDE = new Set(['SPY','QQQ','DIA','IWM','BTC','ETH']);
+    const cleaned = wsbResults.filter(t => t && t.ticker && !EXCLUDE.has(String(t.ticker).toUpperCase()));
+
+    // UPGRADE 1: process the Top 15 trending tickers instead of just 5.
+    const top15 = (cleaned.length ? cleaned : wsbResults).slice(0, 15);
 
     // === STEP 3: Real market data for each ticker ===
-    setStatus('📈 Fetching real market data for ' + top5.length + ' tickers…');
+    setStatus((langMode==='he'?'📈 מושך נתוני שוק אמיתיים עבור ':'📈 Fetching real market data for ') + top15.length + (langMode==='he'?' מניות…':' tickers…'));
     const enrichedResults = await Promise.allSettled(
-      top5.map(async t => {
+      top15.map(async t => {
         const live = await fetchLivePrice(t.ticker);
         return { ...t, live };
       })
@@ -7083,11 +7082,16 @@ async function showSentimentConsensus() {
         const mentions24h = parseInt(t.mentions_24h_ago) || mentions;
         const growth = mentions24h > 0 ? ((mentions - mentions24h) / mentions24h) * 100 : 0;
 
-        // Sentiment based on real growth
-        const sentiment_pct = Math.max(40, Math.min(95, 55 + Math.round(growth / 4)));
+        // UPGRADE 3: velocity of hype via rank advancement (how many ranks climbed since 24h ago).
+        const rank = parseInt(t.rank);
+        const rank24h = parseInt(t.rank_24h_ago) || rank;
+        const rankAdvance = (!isNaN(rank) && !isNaN(rank24h)) ? Math.max(0, rank24h - rank) : 0;
+
+        // Sentiment blends growth + rank momentum (not raw volume) so surges stand out.
+        const momentumBlend = growth + (rankAdvance * 1.5);
+        const sentiment_pct = Math.max(40, Math.min(95, 55 + Math.round(momentumBlend / 4)));
         const heat = mentions >= 500 ? '🔥🔥🔥' : mentions >= 200 ? '🔥🔥' : '🔥';
 
-        // Real volume ratio (proxy for "trending")
         const volRatio = parseFloat(t.live?.volumeRatio) || null;
         const priceChange = parseFloat(t.live?.changePct) || 0;
 
@@ -7098,11 +7102,12 @@ async function showSentimentConsensus() {
           mentions: mentions.toLocaleString(),
           mentions_raw: mentions,
           mentions_growth: growth,
-          thesis: growth > 50 ? 'Rising +' + Math.round(growth) + '% in mentions' :
-                  growth < -30 ? 'Cooling ' + Math.round(growth) + '%' :
-                  mentions + ' mentions, steady',
+          rank_advance: rankAdvance,
+          thesis: growth > 50 ? ('Rising +' + Math.round(growth) + '% in mentions' + (rankAdvance > 0 ? ', climbed ' + rankAdvance + ' ranks' : '')) :
+                  rankAdvance >= 5 ? ('Climbed ' + rankAdvance + ' ranks — accelerating buzz') :
+                  growth < -30 ? ('Cooling ' + Math.round(growth) + '%') :
+                  (mentions + ' mentions, steady'),
           heat,
-          // Real market data
           price: t.live?.price,
           change_pct: priceChange,
           volRatio,
@@ -7110,24 +7115,26 @@ async function showSentimentConsensus() {
         };
       });
 
-    // === STEP 4: Score each ticker with REAL signals ===
-    setStatus('🎯 Computing consensus score…');
+    // === STEP 4: Score each ticker with REAL signals (out of 100) ===
+    setStatus(langMode==='he'?'🎯 מחשב ציון קונצנזוס…':'🎯 Computing consensus score…');
     const scored = wsbTickers.map(t => {
       let score = 0;
       const signals = [];
 
-      // WSB Mentions (40 pts) - real
+      // WSB Activity (40 pts) — momentum-weighted sentiment
       const wsbScore = Math.round((t.sentiment_pct / 100) * 40);
       score += wsbScore;
+      const growthTag = t.mentions_growth > 10 ? ' (+' + Math.round(t.mentions_growth) + '%)'
+                       : t.rank_advance >= 5 ? ' (↑' + t.rank_advance + ' ranks)' : '';
       signals.push({
         source: 'WSB Activity',
-        value: t.mentions + ' mentions' + (t.mentions_growth > 10 ? ' (+' + Math.round(t.mentions_growth) + '%)' : ''),
+        value: t.mentions + ' mentions' + growthTag,
         points: wsbScore,
         bull: t.sentiment_pct >= 55,
         real: true,
       });
 
-      // Volume vs Average (35 pts) - real signal of attention
+      // Volume vs Average (35 pts) — real attention signal
       let volScore = 17;
       let volValue = 'N/A';
       if (t.volRatio !== null) {
@@ -7146,9 +7153,8 @@ async function showSentimentConsensus() {
         real: t.volRatio !== null,
       });
 
-      // Fear & Greed - macro context (25 pts) - real
+      // Fear & Greed — macro context (25 pts) — real, contrarian
       const fg = fgData.score;
-      // Counter-intuitive: extreme fear = better entry, extreme greed = worse
       const fgScore = fg <= 25 ? 25 : fg <= 45 ? 20 : fg <= 55 ? 15 : fg <= 75 ? 10 : 5;
       score += fgScore;
       signals.push({
@@ -7163,7 +7169,8 @@ async function showSentimentConsensus() {
       return { ...t, score, signals, consensus, maxScore: 100 };
     });
 
-    scored.sort((a,b) => b.score - a.score);
+    // Rank by final score; tie-break by hype velocity (growth + rank advancement)
+    scored.sort((a,b) => (b.score - a.score) || ((b.mentions_growth + b.rank_advance) - (a.mentions_growth + a.rank_advance)));
     renderSentimentConsensus(scored, fgData, d, wrapper);
 
   } catch(e) {
@@ -7230,14 +7237,26 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
         ⚡ Run Full Analysis on ${s.ticker}
       </button>` : ''}
     </div>`;
-  }).join('');
+  });
+
+  // DOM performance: show first 10 rows; reveal rest via Show More
+  const FIRST_C = 10;
+  const firstRank = rankCards.slice(0, FIRST_C).join('');
+  const restRank = rankCards.slice(FIRST_C).join('');
+  const consensusMoreBtn = rankCards.length > FIRST_C
+    ? '<div id="consMoreWrap" style="text-align:center;margin-top:6px;">' +
+        '<button onclick="revealMoreRows(\'consHidden\',\'consMoreWrap\')" style="background:var(--s3);border:1px solid var(--b2);color:var(--t2);padding:9px 20px;border-radius:8px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;">' +
+          (langMode==='he' ? ('▾ הצג עוד ' + (rankCards.length - FIRST_C)) : ('▾ Show More (' + (rankCards.length - FIRST_C) + ')')) +
+        '</button>' +
+      '</div>'
+    : '';
 
   wrapper.innerHTML = `
     <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;overflow:hidden;" data-consensus="1">
       <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;">
         <div>
-          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">🎯 Sentiment Consensus · ${d}</div>
-          <div style="font-size:10px;color:var(--t3);margin-top:2px;">WSB + Google Trends + Fear & Greed → Best opportunity</div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--t1);">${langMode==='he'?'🎯 קונצנזוס סנטימנט ומהירות באזז':'🎯 Sentiment & Buzz Velocity'} · ${d}</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:2px;">${langMode==='he'?'WSB + ווליום + פחד&חמדנות → ההזדמנות הטובה ביותר':'WSB velocity + Volume + Fear & Greed → Best opportunity'}</div>
         </div>
         <button onclick="this.closest('[data-consensus]').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
       </div>
@@ -7251,8 +7270,10 @@ function renderSentimentConsensus(scored, fgData, d, wrapper) {
 
       <!-- Ranked tickers -->
       <div style="padding:12px;display:flex;flex-direction:column;gap:8px;">
-        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">Consensus Score (WSB 40pts + Trends 35pts + F+G 25pts)</div>
-        ${rankCards}
+        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px;">${langMode==='he'?'ציון קונצנזוס (WSB 40 + ווליום 35 + פחד&חמדנות 25)':'Consensus Score (WSB 40pts + Volume 35pts + F&G 25pts)'}</div>
+        ${firstRank}
+        <div id="consHidden" style="display:none;flex-direction:column;gap:8px;">${restRank}</div>
+        ${consensusMoreBtn}
       </div>
     </div>`;
   wrapper.setAttribute('data-consensus','1');
@@ -8425,7 +8446,39 @@ function renderPennyResults(data, maxPrice) {
   const results = document.getElementById('pennyResults');
   if (!results || !data.stocks) return;
 
-  const cards = data.stocks.map(function(s) {
+  // DOM performance: render only the first 10 rows initially; reveal the rest on demand.
+  const cardArr = data.stocks.map(function(s) { return renderPennyCard(s); });
+  const FIRST = 10;
+  const firstCards = cardArr.slice(0, FIRST).join('');
+  const restCards = cardArr.slice(FIRST).join('');
+  const moreBtn = cardArr.length > FIRST
+    ? '<div id="pennyMoreWrap" style="padding:12px 16px;text-align:center;border-top:1px solid var(--b1);">' +
+        '<button onclick="revealMoreRows(\'pennyHidden\',\'pennyMoreWrap\')" style="background:var(--s3);border:1px solid var(--b2);color:var(--t2);padding:9px 20px;border-radius:8px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;transition:all .15s;">' +
+          (langMode==='he' ? ('▾ הצג עוד ' + (cardArr.length - FIRST)) : ('▾ Show More (' + (cardArr.length - FIRST) + ')')) +
+        '</button>' +
+      '</div>'
+    : '';
+  results.innerHTML =
+    '<div style="border-top:1px solid var(--b1);">' +
+      '<div style="padding:10px 16px;background:var(--s2);font-family:var(--mono);font-size:9px;color:var(--t3);">' +
+        (data.stocks.length) + ' stocks under $' + maxPrice + ' &middot; ' + (data.scanned_date || '') +
+      '</div>' +
+      firstCards +
+      '<div id="pennyHidden" style="display:none;">' + restCards + '</div>' +
+      moreBtn +
+    '</div>';
+}
+
+// Reveal hidden rows (Show More) — smooth, lightweight DOM reveal shared across tables
+function revealMoreRows(hiddenId, btnWrapId) {
+  const hidden = document.getElementById(hiddenId);
+  const btnWrap = document.getElementById(btnWrapId);
+  if (hidden) { hidden.style.display = 'block'; hidden.style.animation = 'fadeIn .35s ease'; }
+  if (btnWrap) btnWrap.remove();
+}
+
+// Extracted penny card renderer (kept identical to prior inline markup)
+function renderPennyCard(s) {
     const isPos = String(s.price_change_24h || '').charAt(0) === '+';
     const chgCol = isPos ? 'var(--green)' : 'var(--red)';
     const conf = parseInt(s.confidence) || 30;
@@ -8457,15 +8510,6 @@ function renderPennyResults(data, maxPrice) {
       '<div style="margin-top:7px;height:3px;background:var(--b2);border-radius:2px;overflow:hidden;">' +
         '<div style="height:100%;width:' + conf + '%;background:' + confCol + ';border-radius:2px;"></div>' +
       '</div>' +
-    '</div>';
-  }).join('');
-
-  results.innerHTML =
-    '<div style="border-top:1px solid var(--b1);">' +
-      '<div style="padding:10px 16px;background:var(--s2);font-family:var(--mono);font-size:9px;color:var(--t3);">' +
-        (data.stocks.length) + ' stocks under $' + maxPrice + ' &middot; ' + (data.scanned_date || '') +
-      '</div>' +
-      cards +
     '</div>';
 }
 
