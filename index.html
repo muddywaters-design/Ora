@@ -4844,7 +4844,7 @@ function renderAnalysis(ticker, d) {
         (below ? '<div style="font-size:9px;color:var(--orange);margin-bottom:8px;">⚠️ ' + (he2?'מסחר נגד המגמה השבועית הראשית — ביטחון שורי וגודל פוזיציה הוקטנו':'Trading against primary weekly macro trend — bullish confidence & position cut') + '</div>' : '');
       }
       return '<div class="card"><div class="ch">🌡️ ' + (langMode==='he'?'משטר מאקרו':'Macro Regime') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
-        '<div class="cb">' + spyRow + weeklyRow + +
+        '<div class="cb">' + spyRow + weeklyRow +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
             '<span style="font-size:11px;color:var(--t3);">' + (langMode==='he'?'סביבת שוק כללית':'Overall market environment') + '</span>' +
             '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + regimeColor + ';text-transform:uppercase;">' + regimeLabel + '</span>' +
