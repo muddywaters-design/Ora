@@ -5087,8 +5087,23 @@ async function runAllAccuracy() {
       const weekF  = forecasts.week?.direction  || '';
       const monthF = forecasts.month?.direction || '';
 
-      function evalForecast(forecastDir, actualPct) {
+      // How many days since the forecast was made? A "1-week" forecast can't be
+      // judged HIT/MISS until ~7 days pass; a "1-month" forecast until ~30 days.
+      // Before that it stays PENDING (judging early is unfair and meaningless).
+      let daysSinceForecast = null;
+      const fDateRaw = entry.dateISO || entry.date;
+      if (fDateRaw) {
+        const fDate = new Date(fDateRaw);
+        if (!isNaN(fDate.getTime())) {
+          daysSinceForecast = (Date.now() - fDate.getTime()) / 86400000;
+        }
+      }
+
+      // evalForecast now requires that `minDays` have elapsed before giving a verdict.
+      function evalForecast(forecastDir, actualPct, minDays) {
         if (actualPct === null) return 'PENDING';
+        // Not enough time has passed yet → still pending, regardless of current price
+        if (daysSinceForecast !== null && daysSinceForecast < minDays) return 'PENDING';
         const fp = parseFloat(forecastDir);
         if (isNaN(fp)) return 'PENDING';
         const dirMatch = (fp > 0 && actualPct > 0) || (fp < 0 && actualPct < 0);
@@ -5099,8 +5114,9 @@ async function runAllAccuracy() {
         return 'MISS';
       }
 
-      const weekVerdict  = evalForecast(weekF, actualChangePct);
-      const monthVerdict = evalForecast(monthF, actualChangePct);
+      // Week needs ~7 days elapsed; month needs ~30. (Small grace: 6.5 / 28.)
+      const weekVerdict  = evalForecast(weekF, actualChangePct, 6.5);
+      const monthVerdict = evalForecast(monthF, actualChangePct, 28);
 
       // Overall verdict = best of week/month (if either HIT, it's a HIT)
       const overallVerdict = 
