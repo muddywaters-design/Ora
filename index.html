@@ -2865,6 +2865,7 @@ async function fetchSPYRegime() {
         sma50,
         distPct,
         goldenCross: sma50 ? sma50 > sma200 : null,
+        closes,  // full SPY close series — used for relative-strength vs benchmark
       };
     } catch(_) { return null; }
   });
@@ -3781,6 +3782,46 @@ function calcProbabilityCone(closes, price) {
   };
 }
 
+// === Relative Strength vs SPY (market leadership factor) ===
+// Compares the stock's % return against SPY's % return over 1W/1M/3M.
+// Positive RS = outperforming the market (leadership); negative = lagging.
+// This is the institutional "is it beating the benchmark?" check.
+function calcRelativeStrength(stockCloses, spyCloses) {
+  if (!Array.isArray(stockCloses) || !Array.isArray(spyCloses)) return null;
+  if (stockCloses.length < 6 || spyCloses.length < 6) return null;
+
+  const pctChange = (arr, lookback) => {
+    if (arr.length <= lookback) return null;
+    const now = arr[arr.length - 1];
+    const then = arr[arr.length - 1 - lookback];
+    if (!then) return null;
+    return ((now - then) / then) * 100;
+  };
+
+  // 1W ≈ 5 trading days, 1M ≈ 21, 3M ≈ 63
+  const horizons = { w1: 5, m1: 21, m3: 63 };
+  const out = {};
+  let haveAny = false;
+  for (const [key, days] of Object.entries(horizons)) {
+    const stockPct = pctChange(stockCloses, days);
+    const spyPct = pctChange(spyCloses, days);
+    if (stockPct === null || spyPct === null) { out[key] = null; continue; }
+    out[key] = { stock: stockPct, spy: spyPct, rs: stockPct - spyPct }; // RS = excess return vs SPY
+    haveAny = true;
+  }
+  if (!haveAny) return null;
+
+  // Aggregate RS score for the engine: weight near-term more (1W highest).
+  // Each horizon contributes its excess return, scaled; clamped to a sane band.
+  let agg = 0, wsum = 0;
+  const wts = { w1: 0.5, m1: 0.3, m3: 0.2 };
+  for (const key of ['w1','m1','m3']) {
+    if (out[key]) { agg += out[key].rs * wts[key]; wsum += wts[key]; }
+  }
+  out.aggRS = wsum > 0 ? agg / wsum : 0; // weighted average excess return (%)
+  return out;
+}
+
 // === Pearson Correlation (concentration-risk filter) ===
 // Measures how closely two price series move together. r near +1 = highly correlated
 // (low diversification benefit); r near 0 = independent; negative = hedge.
@@ -4162,8 +4203,10 @@ async function runAnalysis(sym) {
     sectorAdjustment(parsed, liveData);        // Sector alignment boost/penalty
     crossTimeframeCheck(parsed);               // MTF agreement check
     calibrateConfidence(parsed, liveData);     // Signal consensus calibration
+    vixConfidenceCalibration(parsed, macroData); // VIX-graduated confidence haircut
     applyHistoricalCalibration(parsed);        // Learn from past forecasts
     weeklyTrendAdjustment(parsed, liveData);   // 20-week SMA primary-trend penalty
+    relativeStrengthAdjustment(parsed);        // Reward leaders / penalize laggards vs SPY
     calculatePositionSize(parsed, liveData, spyRegime); // Position size (regime-scaled)
     pennyStockCircuitBreaker(parsed, liveData); // PENNY GUARDRAIL — runs last, caps stick
     // Record this forecast for future calibration
@@ -4208,6 +4251,10 @@ async function runAnalysis(sym) {
       }
       // Store last 30 closes (for portfolio correlation when this stock is tracked)
       if (cl.length >= 11) parsed._closes30 = cl.slice(-30);
+      // Relative Strength vs SPY (1W/1M/3M) — market leadership factor
+      if (parsed._spyRegime?.closes && cl.length >= 6) {
+        parsed._relStrength = calcRelativeStrength(cl, parsed._spyRegime.closes);
+      }
       // Statistical probability cone (1-SD bounds) for reality-checking AI targets
       const pr2 = parseFloat(liveData?.price) || cl[cl.length-1];
       parsed._probCone = calcProbabilityCone(cl, pr2);
@@ -4843,8 +4890,20 @@ function renderAnalysis(ticker, d) {
         '</div>' +
         (below ? '<div style="font-size:9px;color:var(--orange);margin-bottom:8px;">⚠️ ' + (he2?'מסחר נגד המגמה השבועית הראשית — ביטחון שורי וגודל פוזיציה הוקטנו':'Trading against primary weekly macro trend — bullish confidence & position cut') + '</div>' : '');
       }
+      // VIX confidence-calibration note
+      let vixRow = '';
+      if (d._vixLevel != null && d._vixConfidenceMult != null) {
+        const v = d._vixLevel;
+        const haircut = Math.round((1 - d._vixConfidenceMult) * 100);
+        const vColor = v > 28 ? 'var(--red)' : v > 18 ? 'var(--yellow)' : 'var(--green)';
+        const vLabel = v > 28 ? (he2?'תנודתיות גבוהה':'High Vol') : v < 15 ? (he2?'תנודתיות נמוכה':'Low Vol') : (he2?'תנודתיות בינונית':'Moderate');
+        vixRow = '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:rgba(255,255,255,.03);border-radius:7px;margin-bottom:8px;">' +
+          '<span style="font-size:10px;color:var(--t2);">' + (he2?'כיול ביטחון לפי VIX':'VIX Confidence Calibration') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + vColor + ';">VIX ' + v.toFixed(1) + ' · ' + vLabel + (haircut>0?' · −'+haircut+'%':'') + '</span>' +
+        '</div>';
+      }
       return '<div class="card"><div class="ch">🌡️ ' + (langMode==='he'?'משטר מאקרו':'Macro Regime') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
-        '<div class="cb">' + spyRow + weeklyRow +
+        '<div class="cb">' + spyRow + weeklyRow + vixRow +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
             '<span style="font-size:11px;color:var(--t3);">' + (langMode==='he'?'סביבת שוק כללית':'Overall market environment') + '</span>' +
             '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + regimeColor + ';text-transform:uppercase;">' + regimeLabel + '</span>' +
@@ -4883,6 +4942,33 @@ function renderAnalysis(ticker, d) {
         '</div>';
       }
       return '<div class="card"><div class="ch">📐 ' + (he?'תנודתיות ומומנטום':'Volatility & Momentum') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div><div class="cb">' + rows + '</div></div>';
+    })()}
+
+    ${(() => {
+      // Relative Strength vs SPY (1W/1M/3M) — market leadership
+      if (!d._relStrength) return '';
+      const he = langMode === 'he';
+      const rs = d._relStrength;
+      const cell = (label, h) => {
+        if (!h) return '<div style="flex:1;text-align:center;padding:8px;background:var(--bg);border-radius:8px;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);">' + label + '</div><div style="font-size:11px;color:var(--t3);margin-top:3px;">—</div></div>';
+        const col = h.rs >= 0 ? 'var(--green)' : 'var(--red)';
+        const arrow = h.rs >= 0 ? '▲' : '▼';
+        return '<div style="flex:1;text-align:center;padding:8px;background:var(--bg);border-radius:8px;">' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);">' + label + '</div>' +
+          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + col + ';margin-top:3px;">' + arrow + ' ' + (h.rs>=0?'+':'') + h.rs.toFixed(1) + '%</div>' +
+          '<div style="font-size:8px;color:var(--t3);margin-top:1px;">vs SPY</div>' +
+        '</div>';
+      };
+      const aggCol = rs.aggRS >= 0 ? 'var(--green)' : 'var(--red)';
+      const verdict = rs.aggRS >= 3 ? (he?'מובילה את השוק':'Market Leader')
+                    : rs.aggRS <= -3 ? (he?'מפגרת אחרי השוק':'Lagging Market')
+                    : (he?'בקו עם השוק':'In-Line');
+      return '<div class="card"><div class="ch">📊 ' + (he?'חוזק יחסי מול SPY':'Relative Strength vs SPY') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div>' +
+        '<div class="cb">' +
+          '<div style="display:flex;gap:6px;margin-bottom:8px;">' + cell(he?'שבוע':'1W', rs.w1) + cell(he?'חודש':'1M', rs.m1) + cell(he?'3 חודשים':'3M', rs.m3) + '</div>' +
+          '<div style="text-align:center;font-family:var(--mono);font-size:11px;color:' + aggCol + ';font-weight:700;">' + verdict + (d._rsConfidenceDelta ? ' · ' + (d._rsConfidenceDelta>=0?'+':'') + d._rsConfidenceDelta + (he?' לביטחון':' conf') : '') + '</div>' +
+          '<div style="font-size:8px;color:var(--t3);margin-top:6px;font-style:italic;">' + (he?'חוזק יחסי = תשואת המניה פחות תשואת SPY. חיובי = מנצחת את השוק.':'RS = stock return minus SPY return. Positive = beating the market.') + '</div>' +
+        '</div></div>';
     })()}
 
     ${(() => {
@@ -6493,6 +6579,75 @@ function renderScanner(data, riskLevel) {
 
 // ── Position Sizing (Risk-Adjusted) ───────────────────────────
 // Suggests position size as % of portfolio based on Kelly Criterion + risk factors
+// === VIX Volatility-Adjusted Confidence Calibration ===
+// The live VIX level scales the confidence score on a graduated curve (not a binary
+// threshold). High volatility = market-wide noise → haircut confidence and lean toward
+// near-term horizons. Low volatility = trust the model's baseline confidence.
+function vixConfidenceCalibration(parsed, macroData) {
+  if (!parsed?.forecasts) return parsed;
+  const vix = parseFloat(macroData?.vix);
+  if (isNaN(vix)) return parsed;
+
+  parsed._vixLevel = vix;
+  // Graduated multiplier:
+  //   VIX <= 15  → 1.00 (calm, full confidence)
+  //   VIX 15-25  → smoothly 1.00 → 0.90
+  //   VIX 25-35  → smoothly 0.90 → 0.78
+  //   VIX >= 35  → 0.75 (extreme stress, heavy haircut)
+  let mult;
+  if (vix <= 15) mult = 1.0;
+  else if (vix <= 25) mult = 1.0 - ((vix - 15) / 10) * 0.10;   // 1.00 → 0.90
+  else if (vix <= 35) mult = 0.90 - ((vix - 25) / 10) * 0.12;  // 0.90 → 0.78
+  else mult = 0.75;
+  parsed._vixConfidenceMult = mult;
+
+  // Longer horizons take a slightly bigger haircut in high vol (near-term priority).
+  const horizonExtra = { week: 0, month: 0.01, half_year: 0.03, year: 0.04 };
+  const highVol = vix > 25;
+
+  for (const tf of Object.keys(parsed.forecasts)) {
+    const f = parsed.forecasts[tf];
+    if (!f || f.confidence == null) continue;
+    let m = mult;
+    if (highVol) m -= (horizonExtra[tf] || 0); // extra haircut on far horizons when stressed
+    f.confidence = Math.max(20, Math.min(95, Math.round(f.confidence * m)));
+    if (m < 1) f._vix_haircut = true;
+  }
+  // Reflect on the overall score too
+  if (parsed.confidence_score != null) {
+    parsed.confidence_score = Math.max(20, Math.min(95, Math.round(parsed.confidence_score * mult)));
+  }
+  return parsed;
+}
+
+// === Relative Strength Confidence Adjustment ===
+// Reward leadership (beating SPY), penalize laggards. Effect is modest and capped
+// so it nudges rather than dominates — RS is one factor among many.
+function relativeStrengthAdjustment(parsed) {
+  if (!parsed?.forecasts || !parsed._relStrength) return parsed;
+  const agg = parsed._relStrength.aggRS;
+  if (agg == null || isNaN(agg)) return parsed;
+
+  // Map weighted excess return to a confidence delta, clamped to ±8 points.
+  // ~+10% excess → +5; strongly lagging → up to -8.
+  let delta = Math.max(-8, Math.min(8, agg * 0.6));
+  parsed._rsConfidenceDelta = Math.round(delta);
+
+  for (const tf of ['week', 'month']) {
+    const f = parsed.forecasts[tf];
+    if (!f || f.confidence == null) continue;
+    const dir = parseFloat(f.direction);
+    // Only nudge bullish calls up for leaders / down for laggards (directional sense).
+    if (!isNaN(dir) && dir > 0) {
+      f.confidence = Math.max(20, Math.min(95, Math.round(f.confidence + delta)));
+    } else if (!isNaN(dir) && dir < 0 && agg < 0) {
+      // A bearish call on a laggard gets slight extra conviction
+      f.confidence = Math.max(20, Math.min(95, Math.round(f.confidence + Math.abs(delta) * 0.5)));
+    }
+  }
+  return parsed;
+}
+
 // === Penny Stock Circuit Breaker ===
 // Sub-$5 stocks carry extreme slippage + manipulation risk. When one is analyzed,
 // we hard-cap confidence at 30%, flag a warning badge, and zero out position size.
