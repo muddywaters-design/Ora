@@ -5349,6 +5349,23 @@ function computeProMetrics(results) {
   return m;
 }
 
+// Reset ONLY the learning/forecast history (Brier + per-signal data).
+// Leaves watchlist, portfolios, API keys, and settings completely untouched.
+function resetLearningHistory() {
+  const msg = (typeof langMode !== 'undefined' && langMode === 'he')
+    ? 'לאפס את היסטוריית הלמידה (דיוק, Brier, סיגנלים)?\n\nרשימת המעקב, הפורטפוליו והמפתחות יישארו ללא שינוי. פעולה זו אינה הפיכה.'
+    : 'Reset learning history (accuracy, Brier, per-signal data)?\n\nYour watchlist, portfolios, and API keys stay untouched. This cannot be undone.';
+  if (!confirm(msg)) return;
+  forecastHistory = [];
+  try { localStorage.removeItem('so_forecast_history'); } catch(_) {}
+  const dash = document.getElementById('accDashboard');
+  if (dash) dash.innerHTML = '';
+  const done = (typeof langMode !== 'undefined' && langMode === 'he')
+    ? '✓ היסטוריית הלמידה אופסה. הרשימה והמפתחות נשמרו.'
+    : '✓ Learning history reset. Watchlist & keys preserved.';
+  try { alert(done); } catch(_) {}
+}
+
 function renderAccDashboard(results) {
   const dashboard = document.getElementById('accDashboard');
   if (!dashboard) return;
@@ -5389,7 +5406,10 @@ function renderAccDashboard(results) {
           <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">⚡ Accuracy Dashboard</div>
           <div style="font-size:10px;color:var(--t3);margin-top:2px;">${total} stocks · Updated ${d} · Win rate: <b style="color:${winRate>=60?'var(--green)':winRate>=40?'var(--yellow)':'var(--red)'}">${winRate}%</b></div>
         </div>
-        <button onclick="document.getElementById('accDashboard').innerHTML=''" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button onclick="resetLearningHistory()" title="${langMode==='he'?'אפס היסטוריית למידה בלבד':'Reset learning history only'}" style="background:none;border:1px solid var(--b2);color:var(--t3);cursor:pointer;font-family:var(--mono);font-size:9px;padding:4px 9px;border-radius:6px;">🗑 ${langMode==='he'?'אפס למידה':'Reset Learning'}</button>
+          <button onclick="document.getElementById('accDashboard').innerHTML=''" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">✕</button>
+        </div>
       </div>
 
       <!-- 3 cubes -->
