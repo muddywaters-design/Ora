@@ -6597,7 +6597,7 @@ function vixConfidenceCalibration(parsed, macroData) {
   let mult;
   if (vix <= 15) mult = 1.0;
   else if (vix <= 25) mult = 1.0 - ((vix - 15) / 10) * 0.10;   // 1.00 → 0.90
-  else if (vix <= 35) mult = 0.90 - ((vix - 25) / 10) * 0.12;  // 0.90 → 0.78
+  else if (vix <= 35) mult = 0.90 - ((vix - 25) / 10) * 0.15;  // 0.90 → 0.75 (continuous into floor)
   else mult = 0.75;
   parsed._vixConfidenceMult = mult;
 
