@@ -860,6 +860,13 @@ async function showTopPick() {
         if (fg < 30) fearVotes++;             // fearful sentiment
         else if (fg > 70) greedVotes++;       // greedy sentiment
       }
+      // 4th vote: credit-spread trend (HYG/LQD) — institutional risk gauge
+      const creditTrend = macroData?.creditChange1m;
+      if (creditTrend != null) {
+        votes++;
+        if (creditTrend < -1.5) fearVotes++;       // junk underperforming = stress
+        else if (creditTrend > 1.5) greedVotes++;  // junk outperforming = risk appetite
+      }
       if (votes === 0) return 'neutral';
       if (fearVotes > greedVotes && fearVotes >= 1) return 'fear';
       if (greedVotes > fearVotes && greedVotes >= 1) return 'greed';
@@ -2145,7 +2152,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   const fg = fgData ? `Fear&Greed: ${fgData.score}/100 (${fgData.rating}).` : '';
   const shortCtx   = shortData?.shortPct && shortData.shortPct!=='—' ? `Short:${shortData.shortPct}(${shortData.shortRatio}cover),${shortData.squeezeScore}.` : '';
   const optFlowCtx = optionsData?.flowBias && optionsData.flowBias!=='—'
-    ? `OptionsFlow:${optionsData.flowBias},P/C:${optionsData.pcRatio},${optionsData.unusualSignal}.`
+    ? `OptionsFlow:${optionsData.flowBias},P/C(vol):${optionsData.pcRatio}${optionsData.pcRatioOI ? ',P/C(OI):'+optionsData.pcRatioOI : ''}${optionsData.atmIV ? ',ATM_IV:'+optionsData.atmIV+'%(market-priced expected move)' : ''},${optionsData.unusualSignal}.`
     : '';
   // Earnings proximity warning
   const earningsCtx = (() => {
@@ -2875,6 +2882,7 @@ async function fetchMacroData() {
   const symbols = {
     vix:  '%5EVIX',   // VIX volatility index
     tnx:  '%5ETNX',   // 10-year Treasury yield
+    irx:  '%5EIRX',   // 13-week T-bill yield (for the 10Y-3M curve)
     dxy:  'DX-Y.NYB', // Dollar index
     spy:  'SPY',      // S&P 500
   };
@@ -2925,8 +2933,62 @@ async function fetchMacroData() {
     else if (dxy < 100) { signals.push('DXY=' + dxy.toFixed(1) + '-weak$'); }
   }
 
+  // ── Yield Curve: 10Y minus 3M — the classic recession indicator ──
+  // Unit guard: CBOE indices are sometimes quoted ×10 (e.g. 42.5 = 4.25%).
+  // US treasury yields above 15% are implausible in this era, so >15 ⇒ ×10 quote.
+  const normYield = v => (v != null && v > 15) ? v / 10 : v;
+  const irxRaw = results.irx?.price;
+  let yieldSpread = null;
+  if (tnx != null && irxRaw != null) {
+    const tnxY = normYield(tnx), irxY = normYield(irxRaw);
+    yieldSpread = tnxY - irxY; // percentage points; negative = inverted
+    if (yieldSpread < 0) {
+      signals.push('YieldCurve:INVERTED(' + yieldSpread.toFixed(2) + 'pp,recession-signal)');
+      if (regime === 'neutral') regime = 'risk-off';
+    } else if (yieldSpread < 0.3) {
+      signals.push('YieldCurve:flat(+' + yieldSpread.toFixed(2) + 'pp)');
+    }
+  }
+
+  // ── Credit Spread proxy: HYG (junk) vs LQD (investment grade), ~1 month ──
+  // Junk underperforming quality = credit stress = institutional risk-off.
+  const credit = {};
+  await Promise.all(['HYG','LQD'].map(async sym => {
+    try {
+      const url = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1mo`;
+      const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url='];
+      for (const proxy of proxies) {
+        try {
+          const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(4000)});
+          if (!r.ok) continue;
+          const data = await r.json();
+          const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [];
+          if (closes.length >= 10) { credit[sym] = closes; return; }
+        } catch(_) {}
+      }
+    } catch(_) {}
+  }));
+
+  let creditRatio = null, creditChange1m = null;
+  if (credit.HYG && credit.LQD) {
+    const n = Math.min(credit.HYG.length, credit.LQD.length);
+    const h = credit.HYG.slice(-n), l = credit.LQD.slice(-n);
+    if (l[n-1] && l[0]) {
+      creditRatio = h[n-1] / l[n-1];
+      creditChange1m = ((creditRatio - (h[0] / l[0])) / (h[0] / l[0])) * 100; // % over ~1mo
+      if (creditChange1m < -1.5) {
+        signals.push('Credit:HYG/LQD' + creditChange1m.toFixed(1) + '%/1mo-STRESS');
+        if (regime === 'neutral') regime = 'risk-off';
+      } else if (creditChange1m > 1.5) {
+        signals.push('Credit:HYG/LQD+' + creditChange1m.toFixed(1) + '%/1mo-risk_on');
+      }
+    }
+  }
+
   return {
     vix, tnx, dxy, spy5d,
+    irx: irxRaw, yieldSpread,
+    creditRatio, creditChange1m,
     regime,
     signals: signals.join(','),
     summary: signals.length > 0 ? `Macro:${signals.join(',')}.Regime:${regime}.` : '',
@@ -3005,6 +3067,22 @@ async function fetchOptionsFlow(ticker) {
         const totalPutVol  = puts.reduce((a,o)  => a + (o.volume||0), 0);
         const pcRatio      = totalPutVol > 0 ? (totalPutVol/totalCallVol).toFixed(2) : '—';
 
+        // OI-based P/C — positioning (stabler than day-volume, which is noisy)
+        const totalCallOI = calls.reduce((a,o) => a + (o.openInterest||0), 0);
+        const totalPutOI  = puts.reduce((a,o)  => a + (o.openInterest||0), 0);
+        const pcRatioOI   = totalCallOI > 0 ? totalPutOI / totalCallOI : null;
+
+        // ATM Implied Volatility — the market's PRICED-IN expected move.
+        // Take the call whose strike is nearest to spot (nearest expiration).
+        const spot = chain.quote?.regularMarketPrice;
+        let atmIV = null;
+        if (spot && calls.length) {
+          const atm = [...calls]
+            .filter(o => o.impliedVolatility != null && o.impliedVolatility > 0)
+            .sort((a,b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot))[0];
+          if (atm?.impliedVolatility) atmIV = atm.impliedVolatility * 100; // decimal → %
+        }
+
         // Most unusual single option
         const topCall = unusualCalls.sort((a,b)=>b.volume-a.volume)[0];
         const topPut  = unusualPuts.sort((a,b)=>b.volume-a.volume)[0];
@@ -3018,6 +3096,8 @@ async function fetchOptionsFlow(ticker) {
 
         return {
           pcRatio,
+          pcRatioOI: pcRatioOI != null ? pcRatioOI.toFixed(2) : null,
+          atmIV: atmIV != null ? atmIV.toFixed(1) : null,
           unusualCalls: unusualCalls.length,
           unusualPuts:  unusualPuts.length,
           unusualSignal,
@@ -4174,6 +4254,7 @@ async function runAnalysis(sym) {
       parsed.live_inst_trend    = shortData.instTrend;
     }
     if (optionsData) {
+      parsed._options = optionsData; // full object for the Volatility card (IV + OI P/C)
       parsed.live_options_flow  = optionsData.flowBias;
       parsed.live_options_pc    = optionsData.pcRatio;
       parsed.live_unusual       = optionsData.unusualSignal;
@@ -4902,8 +4983,32 @@ function renderAnalysis(ticker, d) {
           '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + vColor + ';">VIX ' + v.toFixed(1) + ' · ' + vLabel + (haircut>0?' · −'+haircut+'%':'') + '</span>' +
         '</div>';
       }
+      // Yield curve row (10Y-3M) — recession indicator
+      let yieldRow = '';
+      const ys = d._macroData?.yieldSpread;
+      if (ys != null) {
+        const inverted = ys < 0;
+        const yColor = inverted ? 'var(--red)' : ys < 0.3 ? 'var(--yellow)' : 'var(--green)';
+        const yLabel = inverted ? (he2?'הפוך — איתות מיתון':'INVERTED — recession signal') : ys < 0.3 ? (he2?'שטוח':'Flat') : (he2?'תקין':'Normal');
+        yieldRow = '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:rgba(255,255,255,.03);border-radius:7px;border-left:3px solid ' + yColor + ';margin-bottom:8px;">' +
+          '<span style="font-size:10px;color:var(--t2);">' + (he2?'עקום תשואות (10Y−3M)':'Yield Curve (10Y−3M)') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + yColor + ';">' + (ys>=0?'+':'') + ys.toFixed(2) + 'pp · ' + yLabel + '</span>' +
+        '</div>';
+      }
+      // Credit spread row (HYG/LQD 1-month trend) — institutional stress gauge
+      let creditRow = '';
+      const cc = d._macroData?.creditChange1m;
+      if (cc != null) {
+        const stress = cc < -1.5;
+        const cColor = stress ? 'var(--red)' : cc > 1.5 ? 'var(--green)' : 'var(--t1)';
+        const cLabel = stress ? (he2?'סטרס אשראי':'Credit stress') : cc > 1.5 ? (he2?'תיאבון סיכון':'Risk-on') : (he2?'יציב':'Stable');
+        creditRow = '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:rgba(255,255,255,.03);border-radius:7px;border-left:3px solid ' + cColor + ';margin-bottom:8px;">' +
+          '<span style="font-size:10px;color:var(--t2);">' + (he2?'מרווחי אשראי (HYG/LQD)':'Credit Spread (HYG/LQD)') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + cColor + ';">' + (cc>=0?'+':'') + cc.toFixed(1) + '%/1mo · ' + cLabel + '</span>' +
+        '</div>';
+      }
       return '<div class="card"><div class="ch">🌡️ ' + (langMode==='he'?'משטר מאקרו':'Macro Regime') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
-        '<div class="cb">' + spyRow + weeklyRow + vixRow +
+        '<div class="cb">' + spyRow + weeklyRow + vixRow + yieldRow + creditRow +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
             '<span style="font-size:11px;color:var(--t3);">' + (langMode==='he'?'סביבת שוק כללית':'Overall market environment') + '</span>' +
             '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + regimeColor + ';text-transform:uppercase;">' + regimeLabel + '</span>' +
@@ -4919,7 +5024,7 @@ function renderAnalysis(ticker, d) {
 
     ${(() => {
       // ATR volatility + RSI divergence card (computed client-side from price history)
-      if (!d._atr && (!d._rsiDivergence || d._rsiDivergence === 'none')) return '';
+      if (!d._atr && (!d._rsiDivergence || d._rsiDivergence === 'none') && !(d._options && (d._options.atmIV || d._options.pcRatioOI))) return '';
       const he = langMode === 'he';
       let rows = '';
       if (d._atr) {
@@ -4930,6 +5035,36 @@ function renderAnalysis(ticker, d) {
           '<span style="font-family:var(--mono);font-size:12px;color:' + rColor + ';font-weight:700;">$' + d._atr.value.toFixed(2) + ' · ' + d._atr.pct.toFixed(1) + '% · ' + regime + '</span>' +
         '</div>';
       }
+      // Options layer: implied volatility + OI-based put/call positioning (LIVE)
+      if (d._options && d._options.atmIV) {
+        const iv = parseFloat(d._options.atmIV);
+        let ivNote = '';
+        let ivColor = 'var(--blue)';
+        if (d._probCone && d._probCone.dailyVolPct) {
+          // Realized vol: daily-return stddev annualized (×√252) — same units as IV.
+          // (ATR would overstate realized vol; stddev is the statistically correct base.)
+          const realizedAnn = d._probCone.dailyVolPct * Math.sqrt(252);
+          const ratio = realizedAnn > 0 ? iv / realizedAnn : null;
+          if (ratio != null) {
+            if (ratio >= 1.4) { ivNote = he ? ' · השוק מתמחר תנועה גדולה' : ' · market pricing a big move'; ivColor = 'var(--orange)'; }
+            else if (ratio <= 0.75) { ivNote = he ? ' · אופציות זולות יחסית' : ' · options relatively cheap'; ivColor = 'var(--green)'; }
+          }
+        }
+        rows += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;">' +
+          '<span style="font-size:11px;color:var(--t2);">' + (he?'תנודתיות מתומחרת (ATM IV)':'Implied Vol (ATM)') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;color:' + ivColor + ';font-weight:700;">' + iv.toFixed(1) + '%' + ivNote + '</span>' +
+        '</div>';
+      }
+      if (d._options && d._options.pcRatioOI) {
+        const pc = parseFloat(d._options.pcRatioOI);
+        const pcColor = pc > 1.2 ? 'var(--red)' : pc < 0.7 ? 'var(--green)' : 'var(--t1)';
+        const pcLabel = pc > 1.2 ? (he?'הגנתי/דובי':'defensive/bearish') : pc < 0.7 ? (he?'אגרסיבי/שורי':'aggressive/bullish') : (he?'מאוזן':'balanced');
+        rows += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;">' +
+          '<span style="font-size:11px;color:var(--t2);">Put/Call (OI)</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;color:' + pcColor + ';font-weight:700;">' + pc.toFixed(2) + ' · ' + pcLabel + '</span>' +
+        '</div>';
+      }
+
       if (d._rsiDivergence === 'bullish' || d._rsiDivergence === 'bearish') {
         const isBull = d._rsiDivergence === 'bullish';
         const dColor = isBull ? 'var(--green)' : 'var(--red)';
