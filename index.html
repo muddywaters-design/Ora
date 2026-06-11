@@ -1013,7 +1013,7 @@ async function showTopPick() {
 
     let ai = {};
     try {
-      const raw = await withTimeout(toJSON(prompt, false), 30000);
+      const raw = await withTimeout(toJSON(prompt, false), 60000); // 60s — web-search runs need the headroom
       if (raw) ai = extractJSON(raw);
     } catch(verdictErr) {
       // AI verdict failed/timed out — still show the winner with its real signals
@@ -2234,7 +2234,39 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
 
   // === Macro environment ===
-  const macroCtx = macroData?.summary || '';
+  const macroCtx = (() => {
+    let m = macroData?.summary || '';
+    // Explicit directive: block fresh bullish entries when the broad market is deteriorating
+    const riskOff = macroData?.regime === 'risk-off' || (macroData?.spy5d != null && macroData.spy5d < -2);
+    if (riskOff) m += ' MACRO-DIRECTIVE: broad market deteriorating — do NOT issue new bullish entry signals unless the stock shows exceptional relative strength and overwhelming evidence; prefer NEUTRAL.';
+    return m;
+  })();
+  // System performance feedback — the model sees its own recent track record
+  // and must tighten entry criteria when accuracy is poor (n>=5 evaluated to avoid noise).
+  const performanceCtx = (() => {
+    try {
+      const ev = (forecastHistory || [])
+        .filter(r => r.outcomes?.week?.verdict && r.outcomes.week.verdict !== 'PENDING')
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+      if (ev.length < 5) return '';
+      const hits = ev.filter(r => r.outcomes.week.verdict === 'HIT').length;
+      const closes = ev.filter(r => r.outcomes.week.verdict === 'CLOSE').length;
+      const winRate = Math.round(((hits + closes * 0.5) / ev.length) * 100);
+      let lossStreak = 0;
+      for (const r of ev) { if (r.outcomes.week.verdict === 'MISS') lossStreak++; else break; }
+      return 'SystemPerformance(n=' + ev.length + '): winRate ' + winRate + '%, consecutive recent misses: ' + lossStreak +
+        '. DIRECTIVE: if winRate<50% OR misses>=3 — SIGNIFICANTLY tighten trade requirements, reject borderline setups, and prefer NEUTRAL/lower confidence over marginal calls.';
+    } catch(_) { return ''; }
+  })();
+
+  // Penny-risk directive: under $5, the AI must weight liquidity/manipulation danger
+  // (deterministic circuit breaker still enforces caps afterwards — belt + suspenders)
+  const pennyCtx = (() => {
+    const p = parseFloat(liveData?.price);
+    if (isNaN(p) || p >= 5) return '';
+    return 'PENNY-RISK: price $' + p.toFixed(2) + ' is under $5 — weight liquidity danger and manipulation (pump&dump) risk HEAVILY in the risk score; cap bullish conviction; prefer NEUTRAL unless evidence is overwhelming.';
+  })();
+
   // High VIX/yields = penalty on bullish; risk-off = lower confidence
 
   // === Relative Strength Signal ===
@@ -2344,6 +2376,8 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
         // Realistic 1-week move ≈ ATR × √5 trading days
         const weekMove = atrResult.atr * Math.sqrt(5);
         parts.push('~1wk±$' + weekMove.toFixed(2) + '(stat range)');
+        // Force ATR-anchored risk levels — the AI must not guess stops/targets
+        parts.push('RISK-RULE: stop-loss MUST be 1.5-2x ATR below entry ($' + (price - 2*atrResult.atr).toFixed(2) + '–$' + (price - 1.5*atrResult.atr).toFixed(2) + '); near-term targets MUST be ATR multiples (2x: $' + (price + 2*atrResult.atr).toFixed(2) + ', 3x: $' + (price + 3*atrResult.atr).toFixed(2) + '); week range must stay within ±ATRx√5 unless a hard catalyst justifies more');
       }
 
       // RSI divergence — hidden reversal signal
@@ -2351,6 +2385,18 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
       const div = detectRSIDivergence(closes, rsiSeries);
       if (div === 'bullish') parts.push('BULLISH-RSI-DIVERGENCE(price lower-low,RSI higher-low=possible reversal up)');
       else if (div === 'bearish') parts.push('BEARISH-RSI-DIVERGENCE(price higher-high,RSI lower-high=possible reversal down)');
+
+      // Rolling 20-day VWAP: above + volume>=2x avg = statistically strong entry
+      if (liveData?._vwap20 && price) {
+        const vw = liveData._vwap20;
+        const volR = parseFloat(liveData?.volumeRatio);
+        const dist = ((price - vw) / vw * 100).toFixed(1);
+        if (price > vw && !isNaN(volR) && volR >= 2) {
+          parts.push('VWAP-BREAKOUT: price $' + price.toFixed(2) + ' is ' + dist + '% ABOVE 20d-VWAP($' + vw.toFixed(2) + ') WITH volume ' + volR.toFixed(1) + 'x>=2x avg — treat as a VERY STRONG statistical entry signal');
+        } else {
+          parts.push('VWAP20:$' + vw.toFixed(2) + '(price ' + (price > vw ? dist + '% above' : dist + '% below') + ')');
+        }
+      }
 
       return parts.length ? parts.join('. ') + '.' : '';
     } catch(_) { return ''; }
@@ -2368,7 +2414,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
   const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
   const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level, fundamental_outlook.summary, full_analysis) IN HEBREW. Numbers, tickers, and verdict codes stay in English.' : '';
-  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx}
+  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx} ${macroCtx} ${performanceCtx} ${pennyCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","fundamental_outlook":{"summary":"2-3 sentences on financial health","health_score":"1-10","bull_target_pct":"+X%","bear_target_pct":"-X%","base_case_pct":"+/-X%","verdict":"STRONG|HEALTHY|MIXED|WEAK|RISKY"},"full_analysis":"3 sentences."}`;
 }
@@ -3426,6 +3472,25 @@ async function fetchYahooData(ticker) {
         _closes: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [],
         _highs: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.high?.filter(x=>x!=null) || [],
         _lows: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.low?.filter(x=>x!=null) || [],
+        // Rolling 20-day VWAP — computed on RAW aligned arrays (close+volume same index)
+        // to avoid misalignment from independent null-filtering. Honest label: this is a
+        // 20-day rolling VWAP from daily bars, not intraday session VWAP.
+        _vwap20: (() => {
+          try {
+            const q = historicalData?.chart?.result?.[0]?.indicators?.quote?.[0];
+            if (!q?.close || !q?.volume) return null;
+            let pv = 0, vv = 0, used = 0;
+            for (let i = q.close.length - 1; i >= 0 && used < 20; i--) {
+              const cl = q.close[i], vol = q.volume[i];
+              if (cl == null || vol == null || vol <= 0) continue;
+              const h = (q.high && q.high[i] != null) ? q.high[i] : cl;
+              const l = (q.low && q.low[i] != null) ? q.low[i] : cl;
+              const tp = (h + l + cl) / 3; // typical price
+              pv += tp * vol; vv += vol; used++;
+            }
+            return (vv > 0 && used >= 10) ? pv / vv : null;
+          } catch(_) { return null; }
+        })(),
         high52:    high52 || '—',
         low52:     low52  || '—',
         marketCap: marketCap ? formatMarketCap(marketCap) : '—',
@@ -4332,6 +4397,29 @@ async function runAnalysis(sym) {
       }
       // Store last 30 closes (for portfolio correlation when this stock is tracked)
       if (cl.length >= 11) parsed._closes30 = cl.slice(-30);
+      // Deterministic ATR-based risk levels — computed, not AI-guessed
+      if (parsed._atr && parsed._atr.value) {
+        const pr3 = parseFloat(liveData?.price) || cl[cl.length-1];
+        const a = parsed._atr.value;
+        parsed._atrStops = {
+          stop15: pr3 - 1.5 * a,   // tighter stop
+          stop2:  pr3 - 2.0 * a,   // standard stop
+          target2: pr3 + 2.0 * a,  // 1:1 vs 2×ATR stop
+          target3: pr3 + 3.0 * a,  // extended target
+        };
+      }
+      // VWAP signal: close above rolling 20d VWAP + volume >= 2x avg = strong statistical entry
+      if (liveData?._vwap20) {
+        const pr4 = parseFloat(liveData?.price) || cl[cl.length-1];
+        const volR = parseFloat(liveData?.volumeRatio);
+        parsed._vwap = {
+          value: liveData._vwap20,
+          above: pr4 > liveData._vwap20,
+          distPct: ((pr4 - liveData._vwap20) / liveData._vwap20) * 100,
+          strongEntry: pr4 > liveData._vwap20 && !isNaN(volR) && volR >= 2,
+        };
+      }
+
       // Relative Strength vs SPY (1W/1M/3M) — market leadership factor
       if (parsed._spyRegime?.closes && cl.length >= 6) {
         parsed._relStrength = calcRelativeStrength(cl, parsed._spyRegime.closes);
@@ -5062,6 +5150,30 @@ function renderAnalysis(ticker, d) {
         rows += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;">' +
           '<span style="font-size:11px;color:var(--t2);">Put/Call (OI)</span>' +
           '<span style="font-family:var(--mono);font-size:12px;color:' + pcColor + ';font-weight:700;">' + pc.toFixed(2) + ' · ' + pcLabel + '</span>' +
+        '</div>';
+      }
+
+      // Rolling 20d VWAP row (+ strong-entry highlight when volume confirms)
+      if (d._vwap && d._vwap.value) {
+        const v = d._vwap;
+        const vColor = v.strongEntry ? 'var(--green)' : v.above ? 'var(--blue)' : 'var(--red)';
+        const vLabel = v.strongEntry ? (he?'פריצה + נפח ≥2x — סיגנל חזק':'breakout + vol ≥2x — strong signal')
+                     : v.above ? (he?'מעל':'above') : (he?'מתחת':'below');
+        rows += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;">' +
+          '<span style="font-size:11px;color:var(--t2);">VWAP-20d' + (v.strongEntry ? ' ⚡' : '') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:12px;color:' + vColor + ';font-weight:700;">$' + v.value.toFixed(2) + ' · ' + (v.distPct>=0?'+':'') + v.distPct.toFixed(1) + '% ' + vLabel + '</span>' +
+        '</div>';
+      }
+      // Deterministic ATR risk levels (computed, not AI-guessed)
+      if (d._atrStops) {
+        const s = d._atrStops;
+        rows += '<div style="padding:8px;background:var(--bg);border-radius:7px;margin-top:4px;">' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px;">' + (he?'רמות סיכון לפי ATR':'ATR Risk Levels') + '</div>' +
+          '<div style="display:flex;justify-content:space-between;">' +
+            '<span style="font-family:var(--mono);font-size:11px;color:var(--red);">Stop 2x: $' + s.stop2.toFixed(2) + '</span>' +
+            '<span style="font-family:var(--mono);font-size:11px;color:var(--t3);">1.5x: $' + s.stop15.toFixed(2) + '</span>' +
+            '<span style="font-family:var(--mono);font-size:11px;color:var(--green);">' + (he?'יעד':'Target') + ' 2x: $' + s.target2.toFixed(2) + '</span>' +
+          '</div>' +
         '</div>';
       }
 
