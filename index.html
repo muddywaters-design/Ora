@@ -822,11 +822,11 @@ async function showTopPick() {
     const stocks = marketResults
       .filter(r => r.status === 'fulfilled' && r.value.live?.price)
       .map(r => r.value)
-      // PENNY STOCK GUARDRAIL: exclude sub-$5 stocks from recommendations
+      // PENNY STOCK GUARDRAIL: exclude sub-$1 stocks from recommendations
       // (high slippage + manipulation risk → never a "Top Pick")
       .filter(s => {
         const p = parseFloat(s.live?.price);
-        return !isNaN(p) && p >= 5;
+        return !isNaN(p) && p >= 1;
       });
 
     if (stocks.length === 0) throw new Error('Could not fetch market data');
@@ -2259,12 +2259,15 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     } catch(_) { return ''; }
   })();
 
-  // Penny-risk directive: under $5, the AI must weight liquidity/manipulation danger
-  // (deterministic circuit breaker still enforces caps afterwards — belt + suspenders)
+  // Penny-risk directive (graded): under $1 = hard penny warning (matches the circuit
+  // breaker); $1-$5 = soft liquidity note only (no caps — AI just weighs the risk).
   const pennyCtx = (() => {
     const p = parseFloat(liveData?.price);
     if (isNaN(p) || p >= 5) return '';
-    return 'PENNY-RISK: price $' + p.toFixed(2) + ' is under $5 — weight liquidity danger and manipulation (pump&dump) risk HEAVILY in the risk score; cap bullish conviction; prefer NEUTRAL unless evidence is overwhelming.';
+    if (p < 1) {
+      return 'PENNY-RISK: price $' + p.toFixed(2) + ' is under $1 — weight liquidity danger and manipulation (pump&dump) risk HEAVILY in the risk score; cap bullish conviction; prefer NEUTRAL unless evidence is overwhelming.';
+    }
+    return 'LOW-PRICE-NOTE: price $' + p.toFixed(2) + ' ($1-$5 range) — factor in thinner liquidity and higher volatility when scoring risk; no hard caps apply.';
   })();
 
   // High VIX/yields = penalty on bullish; risk-off = lower confidence
@@ -6896,13 +6899,13 @@ function relativeStrengthAdjustment(parsed) {
 }
 
 // === Penny Stock Circuit Breaker ===
-// Sub-$5 stocks carry extreme slippage + manipulation risk. When one is analyzed,
+// Sub-$1 stocks carry extreme slippage + manipulation risk. When one is analyzed,
 // we hard-cap confidence at 30%, flag a warning badge, and zero out position size.
 // This overrides any optimistic technicals or AI verdict — capital protection first.
 function pennyStockCircuitBreaker(parsed, liveData) {
   if (!parsed?.forecasts) return parsed;
   const price = parseFloat(liveData?.price);
-  if (isNaN(price) || price >= 5) return parsed; // not a penny stock
+  if (isNaN(price) || price >= 1) return parsed; // not a penny stock (threshold: $1.00)
 
   parsed._pennyStock = true;
   parsed._pennyPrice = price;
@@ -6964,7 +6967,7 @@ function calculatePositionSize(parsed, liveData, spyRegime) {
 
   // Penny stock: force zero position regardless of other signals
   const pennyPrice = parseFloat(liveData?.price);
-  const isPenny = !isNaN(pennyPrice) && pennyPrice < 5;
+  const isPenny = !isNaN(pennyPrice) && pennyPrice < 1;
 
   // Earnings binary-event buffer: within 7 days of earnings, cut position 75%
   // to avoid gambling on an unpredictable binary corporate event.
