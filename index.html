@@ -439,7 +439,7 @@ body.lang-he .fc-tf {
     <button onclick="showPennyScanner()"
       style="background:linear-gradient(135deg,#b45309,#dc2626);color:#ffffff;border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;text-shadow:0 1px 3px rgba(0,0,0,.4);"
       onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
-      🎰 Penny Stock Scanner — Bullish picks under $0.004
+      🎰 Penny Stock Scanner — Speculative picks under $1.00
     </button>
   </div>
   </div>
@@ -486,7 +486,7 @@ body.lang-he .fc-tf {
             <div><span style="font-size:13px;">🚀</span> <b id="lg-wsb">WSB Hot</b> — <span id="lg-wsb-d">Most-discussed stocks on Reddit WallStreetBets in the last 24h</span></div>
             <div><span style="font-size:13px;">⚡</span> <b id="lg-opp">Opportunity Scanner</b> — <span id="lg-opp-d">Finds stocks showing early signs of a potential move</span></div>
             <div><span style="font-size:13px;">🎯</span> <b id="lg-sent">Sentiment Consensus</b> — <span id="lg-sent-d">Combines WSB buzz, volume & market mood into one score</span></div>
-            <div><span style="font-size:13px;">🎰</span> <b id="lg-penny">Penny Stock Scanner</b> — <span id="lg-penny-d">High-risk speculative picks under $0.004 (gamble territory)</span></div>
+            <div><span style="font-size:13px;">🎰</span> <b id="lg-penny">Penny Stock Scanner</b> — <span id="lg-penny-d">High-risk speculative picks under $1.00 (gamble territory)</span></div>
           </div>
         </div>
 
@@ -1718,7 +1718,7 @@ function showHelpLegend() {
     wsb:['WSB חם','המניות הכי מדוברות ב-Reddit ב-24 שעות'],
     opp:['סורק הזדמנויות','מוצא מניות עם סימנים מוקדמים לתנועה'],
     sent:['קונצנזוס סנטימנט','משלב באזז, נפח ומצב רוח שוק'],
-    penny:['סורק מניות אגורה','בחירות ספקולטיביות מתחת ל-$0.004'],
+    penny:['סורק מניות אגורה','בחירות ספקולטיביות מתחת ל-$1.00'],
     analyze:['ניתוח','עמוד ניתוח המניות הראשי'],
     watch:['רשימת מעקב','מניות במעקב + לוח דיוק תחזיות'],
     port:['תיק','תיק וירטואלי ובדיקת "מה אם הייתי קונה"'],
@@ -1739,7 +1739,7 @@ function showHelpLegend() {
     wsb:['WSB Hot','Most-discussed stocks on Reddit WallStreetBets in 24h'],
     opp:['Opportunity Scanner','Finds stocks showing early signs of a move'],
     sent:['Sentiment Consensus','Combines WSB buzz, volume & market mood'],
-    penny:['Penny Stock Scanner','High-risk speculative picks under $0.004'],
+    penny:['Penny Stock Scanner','High-risk speculative picks under $1.00'],
     analyze:['Analyze','The main stock analysis page'],
     watch:['Watchlist','Tracked stocks + forecast accuracy dashboard'],
     port:['Portfolio','Virtual portfolio + backtest "what if I bought..."'],
@@ -1793,7 +1793,7 @@ function translateLegend() {
   set('lg-wsb','WSB Hot','WSB חם'); set('lg-wsb-d','Most-discussed stocks on Reddit WallStreetBets in the last 24h','המניות הכי מדוברות ב-Reddit WallStreetBets ב-24 השעות האחרונות');
   set('lg-opp','Opportunity Scanner','סורק הזדמנויות'); set('lg-opp-d','Finds stocks showing early signs of a potential move','מוצא מניות עם סימנים מוקדמים לתנועה אפשרית');
   set('lg-sent','Sentiment Consensus','קונצנזוס סנטימנט'); set('lg-sent-d','Combines WSB buzz, volume & market mood into one score','משלב באזז WSB, נפח ומצב רוח שוק לציון אחד');
-  set('lg-penny','Penny Stock Scanner','סורק מניות אגורה'); set('lg-penny-d','High-risk speculative picks under $0.004 (gamble territory)','בחירות ספקולטיביות בסיכון גבוה מתחת ל-$0.004 (טריטוריית הימור)');
+  set('lg-penny','Penny Stock Scanner','סורק מניות אגורה'); set('lg-penny-d','High-risk speculative picks under $1.00 (gamble territory)','בחירות ספקולטיביות בסיכון גבוה מתחת ל-$1.00 (טריטוריית הימור)');
 
   // Menu
   set('lg-analyze','Analyze','ניתוח'); set('lg-analyze-d','The main stock analysis page (this screen)','עמוד ניתוח המניות הראשי (מסך זה)');
@@ -2136,12 +2136,39 @@ function extractJSON(raw) {
 }
 
 // ── Prompts ────────────────────────────────────────────────────
+// Escape external strings before innerHTML injection (targeted XSS hardening)
+function escapeHTML(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// === Data Quality Layer ===
+// Scores how complete this analysis's inputs are (0-100). Missing blocks reduce
+// confidence and are disclosed to the AI so it doesn't infer absent dimensions.
+function validateDataQuality(liveData, insiderData, trendsData, shortData, optionsData, macroData) {
+  const blocks = [
+    { name: 'price',     w: 20, ok: !!(liveData?.price && liveData.price !== '—') },
+    { name: 'history',   w: 20, ok: Array.isArray(liveData?._closes) && liveData._closes.length >= 15 },
+    { name: 'technicals',w: 12, ok: !!(liveData?.rsi && liveData.rsi !== '—') },
+    { name: 'volume',    w: 8,  ok: !!(liveData?.volumeRatio && liveData.volumeRatio !== '—') },
+    { name: 'earnings',  w: 8,  ok: !!(liveData?.nextEarnings && liveData.nextEarnings !== '—') },
+    { name: 'insider',   w: 8,  ok: !!insiderData },
+    { name: 'sentiment', w: 8,  ok: !!trendsData },
+    { name: 'short-int', w: 4,  ok: !!shortData },
+    { name: 'options',   w: 6,  ok: !!(optionsData && optionsData.pcRatio && optionsData.pcRatio !== '—') },
+    { name: 'macro',     w: 6,  ok: !!(macroData && macroData.vix != null) },
+  ];
+  let score = 0; const missing = [];
+  for (const b of blocks) { if (b.ok) score += b.w; else missing.push(b.name); }
+  return { score, missing };
+}
+
 function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, shortData, optionsData, macroData, fhData) {
   const d = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const price = liveData?.price ? `Current price: $${liveData.price} (${liveData.change>=0?'+':''}${liveData.change}, ${liveData.changePct}%). 52W: $${liveData.low52}-$${liveData.high52}. Vol: ${liveData.volume}. MCap: ${liveData.marketCap}. PE: ${liveData.pe}. Target: ${liveData.targetPrice}.` : '';
   const techs = liveData?.rsi && liveData.rsi!=='—' ? `RSI(14):${liveData.rsi} MACD:${liveData.macd} Signal:${liveData.macdSignal} BB:${liveData.bb_lower}-${liveData.bb_mid}-${liveData.bb_upper} Put/Call:${liveData.putCallRatio}.` : '';
   const volCtx  = liveData?.volumeSignal && liveData.volumeSignal!=='—' ? `Vol:${liveData.volume}(${liveData.volumeSignal},${liveData.volumeRatio}x avg).` : '';
-  const earnCtx = liveData?.earningsSurprise && liveData.earningsSurprise!=='—' ? `Earn:${liveData.earningsSurprise},${liveData.earningsTrend}${liveData.nextEarnings!=='—'?`,next:${liveData.nextEarnings}`:''}.` : '';
+  const earnCtx = liveData?.earningsSurprise && liveData.earningsSurprise!=='—' ? `Earn:${liveData.earningsSurprise}${liveData.avgSurprisePct!=null?`,avgSurp:${liveData.avgSurprisePct>=0?'+':''}${liveData.avgSurprisePct.toFixed(1)}%`:''},${liveData.earningsTrend}${liveData.nextEarnings!=='—'?`,next:${liveData.nextEarnings}`:''}.` : '';
   const posCtx  = liveData?.weekPos52 && liveData.weekPos52!=='—' ? `52W-pos:${liveData.weekPos52}%(${liveData.weekPos52Label}).` : '';
   const secCtx  = liveData?.sectorRelative && liveData.sectorRelative!=='—' ? `SectorVs${liveData.sectorETF}:${liveData.sectorRelativeLabel}.` : '';
   const revCtx  = liveData?.analystRevision && liveData.analystRevision!=='—' ? `AnalystTrend:${liveData.analystRevision}(${liveData.analystRevisionLabel}).` : '';
@@ -2241,6 +2268,13 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     if (riskOff) m += ' MACRO-DIRECTIVE: broad market deteriorating — do NOT issue new bullish entry signals unless the stock shows exceptional relative strength and overwhelming evidence; prefer NEUTRAL.';
     return m;
   })();
+  // Data quality: compute once, stash for the attach phase, disclose gaps to the AI
+  const _dq = validateDataQuality(liveData, insiderData, trendsData, shortData, optionsData, macroData);
+  if (liveData) liveData._dq = _dq;
+  const dataQualityCtx = _dq.score < 90
+    ? 'DataQuality:' + _dq.score + '% (missing:' + _dq.missing.join('/') + ') — reduce certainty proportionally for the missing dimensions; do NOT infer them.'
+    : '';
+
   // System performance feedback — the model sees its own recent track record
   // and must tighten entry criteria when accuracy is poor (n>=5 evaluated to avoid noise).
   const performanceCtx = (() => {
@@ -2417,7 +2451,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
   const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
   const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level, fundamental_outlook.summary, full_analysis) IN HEBREW. Numbers, tickers, and verdict codes stay in English.' : '';
-  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx} ${macroCtx} ${performanceCtx} ${pennyCtx}
+  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx} ${macroCtx} ${performanceCtx} ${pennyCtx} ${dataQualityCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","fundamental_outlook":{"summary":"2-3 sentences on financial health","health_score":"1-10","bull_target_pct":"+X%","bear_target_pct":"-X%","base_case_pct":"+/-X%","verdict":"STRONG|HEALTHY|MIXED|WEAK|RISKY"},"full_analysis":"3 sentences."}`;
 }
@@ -3300,7 +3334,7 @@ async function fetchYahooData(ticker) {
       } catch(_) {}
 
       // Earnings history — surprise trend
-      let earningsSurprise = '—', earningsTrend = '—', nextEarnings = '—';
+      let earningsSurprise = '—', earningsTrend = '—', nextEarnings = '—', avgSurprisePct = null;
       try {
         const url5 = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=earningsHistory,calendarEvents,earningsTrend`;
         const r5 = await fetch(proxy + encodeURIComponent(url5), {signal: AbortSignal.timeout(4000)});
@@ -3315,6 +3349,8 @@ async function fetchYahooData(ticker) {
             const avgSurprise = surprises.reduce((a,b)=>a+b,0) / surprises.length;
             const beats = surprises.filter(s => s > 0).length;
             earningsSurprise = `${beats}/${surprises.length} beats`;
+            // Average surprise magnitude — unit guard: Yahoo raw is usually a fraction
+            avgSurprisePct = Math.abs(avgSurprise) <= 1 ? avgSurprise * 100 : avgSurprise;
             earningsTrend = avgSurprise > 5 ? `Avg +${avgSurprise.toFixed(1)}% surprise ↑` :
                             avgSurprise > 0 ? `Avg +${avgSurprise.toFixed(1)}% surprise` :
                             `Avg ${avgSurprise.toFixed(1)}% miss ↓`;
@@ -3478,6 +3514,20 @@ async function fetchYahooData(ticker) {
         // Rolling 20-day VWAP — computed on RAW aligned arrays (close+volume same index)
         // to avoid misalignment from independent null-filtering. Honest label: this is a
         // 20-day rolling VWAP from daily bars, not intraday session VWAP.
+        // Average daily volume, last 20 valid days — liquidity tiering
+        _avgVol20: (() => {
+          try {
+            const q = historicalData?.chart?.result?.[0]?.indicators?.quote?.[0];
+            if (!q?.volume) return null;
+            let s = 0, n = 0;
+            for (let i = q.volume.length - 1; i >= 0 && n < 20; i--) {
+              const v = q.volume[i];
+              if (v == null || v <= 0) continue;
+              s += v; n++;
+            }
+            return n >= 10 ? s / n : null;
+          } catch(_) { return null; }
+        })(),
         _vwap20: (() => {
           try {
             const q = historicalData?.chart?.result?.[0]?.indicators?.quote?.[0];
@@ -3502,7 +3552,7 @@ async function fetchYahooData(ticker) {
         pe, eps, targetPrice, numAnalysts,
         rsi, macd, macdSignal, bb_upper, bb_lower, bb_mid, putCallRatio,
         avgVolume, volumeRatio, volumeSignal,
-        earningsSurprise, earningsTrend, nextEarnings,
+        earningsSurprise, earningsTrend, nextEarnings, avgSurprisePct,
         weekPos52, weekPos52Label,
         sectorETF, sectorChange, sectorRelative, sectorRelativeLabel,
         analystRevision, analystRevisionLabel,
@@ -3925,8 +3975,10 @@ function calcProbabilityCone(closes, price) {
   };
   return {
     dailyVolPct: dailyStd * 100,
-    week: cone(5),    // ~5 trading days
-    month: cone(21),  // ~21 trading days
+    week: cone(5),       // ~5 trading days
+    month: cone(21),     // ~21 trading days
+    halfYear: cone(126), // ~126 trading days
+    year: cone(252),     // ~252 trading days
   };
 }
 
@@ -4356,6 +4408,7 @@ async function runAnalysis(sym) {
     applyHistoricalCalibration(parsed);        // Learn from past forecasts
     weeklyTrendAdjustment(parsed, liveData);   // 20-week SMA primary-trend penalty
     relativeStrengthAdjustment(parsed);        // Reward leaders / penalize laggards vs SPY
+    liquidityDataQualityAdjustment(parsed);    // Thin liquidity / missing data → confidence haircut
     calculatePositionSize(parsed, liveData, spyRegime); // Position size (regime-scaled)
     pennyStockCircuitBreaker(parsed, liveData); // PENNY GUARDRAIL — runs last, caps stick
     // Record this forecast for future calibration
@@ -4380,7 +4433,7 @@ async function runAnalysis(sym) {
           };
         } catch(_) { return null; }
       })();
-      recordForecast(t, parsed.forecasts, parseFloat(liveData.price), sigSnapshot);
+      recordForecast(t, parsed.forecasts, parseFloat(liveData.price), sigSnapshot, parsed._spyRegime?.spyPrice);
     }
     currentResult = parsed;
     clearInterval(iv);
@@ -4400,6 +4453,18 @@ async function runAnalysis(sym) {
       }
       // Store last 30 closes (for portfolio correlation when this stock is tracked)
       if (cl.length >= 11) parsed._closes30 = cl.slice(-30);
+      // Data quality + liquidity (computed in mkSinglePrompt / fetchYahooData)
+      if (liveData?._dq) parsed._dataQuality = liveData._dq;
+      if (liveData?._avgVol20) {
+        const prL = parseFloat(liveData?.price) || cl[cl.length-1];
+        const dollarVol = liveData._avgVol20 * prL;
+        parsed._liquidity = {
+          avgVol20: liveData._avgVol20,
+          dollarVol20: dollarVol,
+          tier: dollarVol < 1e6 ? 'illiquid' : dollarVol < 1e7 ? 'thin' : 'liquid',
+        };
+      }
+
       // Deterministic ATR-based risk levels — computed, not AI-guessed
       if (parsed._atr && parsed._atr.value) {
         const pr3 = parseFloat(liveData?.price) || cl[cl.length-1];
@@ -5098,8 +5163,20 @@ function renderAnalysis(ticker, d) {
           '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + cColor + ';">' + (cc>=0?'+':'') + cc.toFixed(1) + '%/1mo · ' + cLabel + '</span>' +
         '</div>';
       }
+      // Data quality + liquidity strip
+      let dqRow = '';
+      if (d._dataQuality) {
+        const dq = d._dataQuality;
+        const dqColor = dq.score >= 85 ? 'var(--green)' : dq.score >= 60 ? 'var(--yellow)' : 'var(--red)';
+        const liq = d._liquidity;
+        const liqTxt = liq ? (' · ' + (he2?'נזילות':'Liq') + ': $' + (liq.dollarVol20 >= 1e6 ? (liq.dollarVol20/1e6).toFixed(1) + 'M' : Math.round(liq.dollarVol20/1e3) + 'K') + '/d' + (liq.tier !== 'liquid' ? ' ⚠' : '')) : '';
+        dqRow = '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:rgba(255,255,255,.03);border-radius:7px;margin-bottom:8px;">' +
+          '<span style="font-size:10px;color:var(--t2);">' + (he2?'איכות נתונים':'Data Quality') + '</span>' +
+          '<span style="font-family:var(--mono);font-size:11px;font-weight:700;color:' + dqColor + ';">' + dq.score + '%' + (dq.missing.length ? ' · ' + (he2?'חסר: ':'missing: ') + escapeHTML(dq.missing.slice(0,3).join(', ')) : '') + liqTxt + '</span>' +
+        '</div>';
+      }
       return '<div class="card"><div class="ch">🌡️ ' + (langMode==='he'?'משטר מאקרו':'Macro Regime') + ' <span style="font-size:9px;background:var(--green);color:var(--bg);padding:1px 5px;border-radius:3px;">LIVE</span></div>' +
-        '<div class="cb">' + spyRow + weeklyRow + vixRow + yieldRow + creditRow +
+        '<div class="cb">' + spyRow + weeklyRow + vixRow + yieldRow + creditRow + dqRow +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
             '<span style="font-size:11px;color:var(--t3);">' + (langMode==='he'?'סביבת שוק כללית':'Overall market environment') + '</span>' +
             '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + regimeColor + ';text-transform:uppercase;">' + regimeLabel + '</span>' +
@@ -5245,6 +5322,8 @@ function renderAnalysis(ticker, d) {
           '<div style="font-size:10px;color:var(--t3);margin-bottom:8px;">' + (he?('תנודתיות יומית ' + pc.dailyVolPct.toFixed(1) + '% — היכן המחיר אמור לנוע ב-68% מהמקרים:'):('Daily volatility ' + pc.dailyVolPct.toFixed(1) + '% — where price should trade 68% of the time:')) + '</div>' +
           row(he?'שבוע':'1 Week', pc.week) +
           row(he?'חודש':'1 Month', pc.month) +
+          (pc.halfYear ? row(he?'חצי שנה':'6 Months', pc.halfYear) : '') +
+          (pc.year ? row(he?'שנה':'1 Year', pc.year) : '') +
           '<div style="font-size:8px;color:var(--t3);margin-top:4px;font-style:italic;">' + (he?'אם יעד ה-AI מחוץ לטווח הזה — הוא אגרסיבי סטטיסטית. השווה למספרים של קלוד למעלה.':'If an AI target sits outside this range, it is statistically aggressive. Cross-check against Claude\'s targets above.') + '</div>' +
         '</div></div>';
     })()}
@@ -5367,6 +5446,9 @@ function txtCard(title, text, acc) {
 // ── Run All Accuracy Check ────────────────────────────────────
 async function runAllAccuracy() {
   if (watchlist.length === 0) return;
+  // Current SPY — enables benchmark-excess on records that stored spy_at_forecast
+  let spyNowPrice = null;
+  try { const _s = await fetchLivePrice('SPY'); spyNowPrice = parseFloat(_s?.price) || null; } catch(_) {}
   const btn = document.getElementById('runAllBtn');
   const dashboard = document.getElementById('accDashboard');
   if (!btn || !dashboard) return;
@@ -5470,6 +5552,11 @@ async function runAllAccuracy() {
         ticker: entry.ticker,
         company: entry.company,
         forecastDate: entry.date,
+        actualPct: actualChangePct,
+        weekForecastPct: (() => { const v = parseFloat(entry.forecasts?.week?.direction); return isNaN(v) ? null : v; })(),
+        spyExcess: (entry.spy_at_forecast && spyNowPrice && actualChangePct != null)
+          ? actualChangePct - ((spyNowPrice - entry.spy_at_forecast) / entry.spy_at_forecast * 100)
+          : null,
         forecastPrice: forecastPrice ? `$${forecastPrice.toFixed(2)}` : '—',
         currentPrice: currentPrice ? `$${currentPrice.toFixed(2)}` : '—',
         actualChange: actualChangePct !== null ? (actualChangePct >= 0 ? '+' : '') + actualChangePct.toFixed(2) + '%' : '—',
@@ -5714,6 +5801,11 @@ function renderAccDashboard(results) {
   const evaluated = hits + closes + misses;
   const winRate = evaluated > 0 ? Math.round((hits + closes * 0.5) / evaluated * 100) : 0;
   const pro = computeProMetrics(results); // Brier, Sharpe, Max Drawdown (#4)
+  // MAE (forecast vs actual, evaluated only) + benchmark excess vs SPY
+  const maePairs = results.filter(r => r.actualPct != null && r.weekForecastPct != null && r.overallVerdict !== 'PENDING');
+  const mae = maePairs.length ? maePairs.reduce((a,r)=>a+Math.abs(r.weekForecastPct - r.actualPct),0)/maePairs.length : null;
+  const excPairs = results.filter(r => r.spyExcess != null && r.overallVerdict !== 'PENDING');
+  const avgExcess = excPairs.length ? excPairs.reduce((a,r)=>a+r.spyExcess,0)/excPairs.length : null;
 
   const verdictBadge = (v) => {
     const map = { HIT:'✓ HIT', CLOSE:'~ CLOSE', MISS:'✗ MISS', PENDING:'⏳ PENDING' };
@@ -5818,7 +5910,11 @@ function renderAccDashboard(results) {
 
         return '<div style="padding:4px 16px 12px;">' +
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">' + (he?'📐 מדדים מקצועיים':'📐 Professional Metrics') + '</div>' +
-          '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + brierCard + sharpeCard + ddCard + avgCard + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + brierCard + sharpeCard + ddCard +
+          '<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:7px;margin-top:6px;font-family:var(--mono);font-size:9px;color:var(--t3);flex-basis:100%;">' +
+            '<span>MAE (week): ' + (mae != null ? mae.toFixed(1) + 'pp' : (he?'— נצבר':'— accumulating')) + '</span>' +
+            '<span>vs SPY: ' + (avgExcess != null ? (avgExcess>=0?'+':'') + avgExcess.toFixed(1) + '% (n=' + excPairs.length + ')' : (he?'— נצבר':'— accumulating')) + '</span>' +
+          '</div>' + avgCard + '</div>' +
           (pro.paperTrades > 0 ? '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?'מבוסס על סימולציית paper-trade של תחזיות שוריות בביטחון >70%. Sharpe שנתי (×√52). לא ייעוץ השקעות.':'Based on paper-trade simulation of >70% confidence bullish forecasts. Sharpe is annualized (×√52). Not investment advice.') + '</div>' : '') +
         '</div>';
       })()}
@@ -5960,6 +6056,7 @@ function addToWatchlist() {
     price: currentResult.current_price || '—',
     date: new Date().toLocaleDateString('en-US', {month:'short', day:'numeric'}),
     dateISO: new Date().toISOString(),
+    spy_at_forecast: (typeof parsed !== 'undefined' && parsed?._spyRegime?.spyPrice) ? parsed._spyRegime.spyPrice : null,
     data: currentResult,
   });
   const wasTrimmed = watchlist.length > 20;
@@ -6775,7 +6872,7 @@ function renderScanner(data, riskLevel) {
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
             <span onclick="document.getElementById('tickerInput').value='${s.ticker}';runAnalysis('${s.ticker}')"
               style="font-family:var(--mono);font-size:16px;font-weight:700;color:${col};cursor:pointer;">${s.ticker}</span>
-            <span style="font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.company}</span>
+            <span style="font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHTML(s.company)}</span>
           </div>
           <div style="font-size:10px;color:var(--t3);">${s.current_price}${s.change_pct !== undefined ? ` <span style="color:${s.change_pct>=0?'var(--green)':'var(--red)'};font-family:var(--mono);">${s.change_pct>=0?'+':''}${s.change_pct.toFixed(2)}%</span>` : ''}</div>
         </div>
@@ -6894,6 +6991,31 @@ function relativeStrengthAdjustment(parsed) {
       // A bearish call on a laggard gets slight extra conviction
       f.confidence = Math.max(20, Math.min(95, Math.round(f.confidence + Math.abs(delta) * 0.5)));
     }
+  }
+  return parsed;
+}
+
+// === Liquidity + Data-Quality Confidence Adjustment ===
+// Thin liquidity = wider spreads, harder exits → modest confidence haircut.
+// Incomplete data = blind spots → haircut proportional to what's missing (max ~15%).
+function liquidityDataQualityAdjustment(parsed) {
+  if (!parsed?.forecasts) return parsed;
+  let mult = 1.0;
+  if (parsed._liquidity) {
+    if (parsed._liquidity.tier === 'illiquid') mult *= 0.85;
+    else if (parsed._liquidity.tier === 'thin') mult *= 0.95;
+  }
+  if (parsed._dataQuality) {
+    mult *= 0.85 + 0.15 * (parsed._dataQuality.score / 100);
+  }
+  if (mult >= 0.999) return parsed;
+  parsed._liqDqMult = mult;
+  for (const tf of ['week','month']) {
+    const f = parsed.forecasts[tf];
+    if (f && f.confidence != null) f.confidence = Math.max(20, Math.min(95, Math.round(f.confidence * mult)));
+  }
+  if (parsed.confidence_score != null) {
+    parsed.confidence_score = Math.max(20, Math.min(95, Math.round(parsed.confidence_score * mult)));
   }
   return parsed;
 }
@@ -7020,6 +7142,10 @@ function calculatePositionSize(parsed, liveData, spyRegime) {
     positionSize *= earningsMult;
     // Apply weekly-trend buffer (below 20-week SMA → cut 40%)
     positionSize *= weeklyTrendMult;
+  // Liquidity: illiquid names get half-size (exit risk), thin names 0.8x
+  const liqTier = parsed._liquidity?.tier;
+  const liquidityMult = liqTier === 'illiquid' ? 0.5 : liqTier === 'thin' ? 0.8 : 1.0;
+  positionSize *= liquidityMult;
     // Penny stock → force zero position (capital protection)
     if (isPenny) positionSize = 0;
 
@@ -7841,12 +7967,13 @@ function getTickerAccuracy(ticker) {
   };
 }
 
-function recordForecast(ticker, forecasts, livePrice, signalScores) {
+function recordForecast(ticker, forecasts, livePrice, signalScores, spyPrice) {
   const record = {
     id: Date.now(),
     ticker,
     date: new Date().toISOString(),
     price_at_forecast: livePrice,
+    spy_at_forecast: (spyPrice != null && !isNaN(parseFloat(spyPrice))) ? parseFloat(spyPrice) : null,
     forecasts: {
       week:      { direction: forecasts.week?.direction,      confidence: forecasts.week?.confidence      },
       month:     { direction: forecasts.month?.direction,     confidence: forecasts.month?.confidence     },
@@ -8788,13 +8915,13 @@ function showPennyScanner() {
       '<div style="padding:12px 16px;border-bottom:1px solid var(--b1);background:rgba(220,38,38,.06);display:flex;align-items:center;justify-content:space-between;">',
         '<div>',
           '<div style="font-family:var(--mono);font-size:11px;font-weight:700;color:#ef4444;">&#127922; Penny Stock Scanner</div>',
-          '<div style="font-size:10px;color:var(--t3);margin-top:2px;">All exchanges incl. OTC/Pink Sheets &middot; Under $0.004</div>',
+          '<div style="font-size:10px;color:var(--t3);margin-top:2px;">NASDAQ / NYSE / AMEX &middot; Under $1.00</div>',
         '</div>',
         '<button onclick="document.querySelector(\'[data-penny]\').remove()" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;">&#x2715;</button>',
       '</div>',
       '<div style="padding:12px 16px;background:rgba(251,191,36,.06);border-bottom:1px solid rgba(251,191,36,.2);">',
         '<div style="font-size:11px;color:#fbbf24;line-height:1.6;">',
-          '&#9888; <b>High Risk Warning:</b> Penny stocks under $0.004 carry extreme risk. Research only, not financial advice.',
+          '&#9888; <b>High Risk Warning:</b> Stocks under $1.00 trade in delisting territory and carry extreme risk. Research only, not financial advice.',
         '</div>',
       '</div>',
       '<div style="padding:12px 16px;display:flex;flex-direction:column;gap:10px;">',
@@ -8802,9 +8929,9 @@ function showPennyScanner() {
           '<div>',
             '<label style="font-family:var(--mono);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:5px;">Max Price</label>',
             '<select id="pennyMaxPrice" style="width:100%;background:var(--s2);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;outline:none;">',
-              '<option value="0.004">$0.004 (sub-penny)</option>',
-              '<option value="0.01">$0.01 (1 cent)</option>',
-              '<option value="0.05">$0.05 (5 cents)</option>',
+              '<option value="1.00">$1.00 (penny range)</option>',
+              '<option value="0.50">$0.50 (50 cents)</option>',
+              '<option value="0.25">$0.25 (25 cents)</option>',
               '<option value="0.10">$0.10 (10 cents)</option>',
             '</select>',
           '</div>',
@@ -8829,15 +8956,15 @@ function showPennyScanner() {
 }
 
 async function runPennyScanner() {
-  const maxPrice = parseFloat(document.getElementById('pennyMaxPrice')?.value || '0.004');
+  const maxPrice = parseFloat(document.getElementById('pennyMaxPrice')?.value || '1.00');
   const signal   = document.getElementById('pennySignal')?.value || 'bullish';
   const results  = document.getElementById('pennyResults');
   if (!results) return;
 
   const btn = document.querySelector('[data-penny] button[onclick="runPennyScanner()"]');
-  if (btn) { btn.disabled = true; btn.textContent = 'Scanning all exchanges...'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Searching live (20-40s)...'; }
 
-  results.innerHTML = '<div style="padding:20px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--t3);">Scanning NASDAQ, NYSE, AMEX, OTC, Pink Sheets...</div>';
+  results.innerHTML = '<div style="padding:20px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--t3);">Live web search: NASDAQ, NYSE, AMEX movers under $' + maxPrice.toFixed(2) + '...</div>';
 
   const d = new Date().toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
 
@@ -8849,25 +8976,25 @@ async function runPennyScanner() {
   };
   const signalDesc = signalMap[signal] || signalMap.bullish;
 
-  // Build prompt without triggering refusal — ask for knowledge-based picks
+  // Honest live-search prompt: real listed stocks, real current data, never invented.
+  // (Replaces the old "knowledge-based picks" approach that both violated our
+  //  no-fabrication principle and got refused for sub-penny tickers anyway.)
   const prompt = [
-    'You are a financial data assistant. Based on your training knowledge of OTC and penny stock markets,',
-    'list 5 example sub-penny stocks (priced under $' + maxPrice + ') that have historically shown ' + signalDesc + '.',
-    'Use real ticker symbols that have actually traded on US OTC/Pink Sheet markets.',
-    'Do not mention dates or current prices — use approximate price ranges from your knowledge.',
-    'This is for educational research about penny stock characteristics.',
+    'TODAY: ' + d + '. Use web search to find CURRENT, REAL low-priced stocks.',
+    'Task: identify exactly 5 stocks listed on NASDAQ, NYSE, or AMEX (no OTC/Pink Sheets)',
+    'currently trading under $' + maxPrice + ' that recently showed ' + signalDesc + '.',
+    'These are high-risk speculative securities in delisting territory: be factual,',
+    'use real recent prices/volumes from your search results, and keep confidence honest and LOW (25-55).',
+    'If you cannot verify a stock via search, exclude it. NEVER invent tickers, prices, or volumes.',
     'Reply with ONLY a JSON object, first character { last character }, no markdown:',
-    '{"max_price":"$' + maxPrice + '","signal_type":"' + signal + '","disclaimer":"Educational only - not financial advice - verify all data","stocks":[',
-    '{"rank":1,"ticker":"FILL","company":"Fill real company name","exchange":"OTC","current_price":"~$0.001","price_change_24h":"varies","volume_ratio":"high","market_cap":"~$2M","why_bullish":"Reason based on known characteristics. Second reason.","catalyst":"Known catalyst type for this stock.","confidence":40},',
-    '{"rank":2,"ticker":"FILL","company":"Fill","exchange":"Pink Sheets","current_price":"~$0.002","price_change_24h":"varies","volume_ratio":"elevated","market_cap":"~$1M","why_bullish":"Fill real reason.","catalyst":"Fill catalyst.","confidence":35},',
-    '{"rank":3,"ticker":"FILL","company":"Fill","exchange":"OTC","current_price":"~$0.003","price_change_24h":"varies","volume_ratio":"moderate","market_cap":"~$3M","why_bullish":"Fill.","catalyst":"Fill.","confidence":30},',
-    '{"rank":4,"ticker":"FILL","company":"Fill","exchange":"OTC","current_price":"~$0.002","price_change_24h":"varies","volume_ratio":"moderate","market_cap":"~$2M","why_bullish":"Fill.","catalyst":"Fill.","confidence":28},',
-    '{"rank":5,"ticker":"FILL","company":"Fill","exchange":"Pink Sheets","current_price":"~$0.001","price_change_24h":"varies","volume_ratio":"low-moderate","market_cap":"~$1M","why_bullish":"Fill.","catalyst":"Fill.","confidence":25}',
+    '{"max_price":"$' + maxPrice + '","signal_type":"' + signal + '","disclaimer":"High-risk speculative screen - not financial advice - verify all data","stocks":[',
+    '{"rank":1,"ticker":"REAL","company":"Real company name","exchange":"NASDAQ","current_price":"$0.84","price_change_24h":"+12.3%","volume_ratio":"6.2x avg","market_cap":"$45M","why_bullish":"Factual momentum reason from search results. Second factual point.","catalyst":"Real recent catalyst with approximate date.","confidence":45}',
+    ',... repeat the same object shape for ranks 2-5 (exactly 5 items total in the stocks array)',
     ']}'
   ].join(' ');
 
   try {
-    const raw  = await toJSON(prompt);
+    const raw  = await toJSON(prompt, true); // true = web search for live data
     const data = extractJSON(raw);
     renderPennyResults(data, maxPrice);
   } catch(e) {
@@ -8932,7 +9059,7 @@ function renderPennyCard(s) {
         '<div style="flex:1;">' +
           '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap;">' +
             '<span data-pt="' + s.ticker + '" onclick="pennyGoAnalyze(this.dataset.pt)" style="font-family:var(--mono);font-size:15px;font-weight:700;color:#f97316;cursor:pointer;">' + s.ticker + '</span>' +
-            '<span style="font-size:11px;color:var(--t2);">' + (s.company || '') + '</span>' +
+            '<span style="font-size:11px;color:var(--t2);">' + escapeHTML(s.company || '') + '</span>' +
             '<span style="padding:2px 7px;border-radius:20px;font-family:var(--mono);font-size:9px;color:' + exchCol + ';border:1px solid ' + exchCol + '40;">' + exch + '</span>' +
           '</div>' +
           '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
@@ -8946,8 +9073,8 @@ function renderPennyCard(s) {
           '<div style="font-size:9px;color:#ef4444;">EXTREME RISK</div>' +
         '</div>' +
       '</div>' +
-      '<div style="font-size:11px;color:var(--t2);line-height:1.5;margin-bottom:5px;">' + (s.why_bullish || '') + '</div>' +
-      '<div style="font-size:10px;color:var(--t3);">Catalyst: ' + (s.catalyst || '') + '</div>' +
+      '<div style="font-size:11px;color:var(--t2);line-height:1.5;margin-bottom:5px;">' + escapeHTML(s.why_bullish || '') + '</div>' +
+      '<div style="font-size:10px;color:var(--t3);">Catalyst: ' + escapeHTML(s.catalyst || '') + '</div>' +
       '<div style="margin-top:7px;height:3px;background:var(--b2);border-radius:2px;overflow:hidden;">' +
         '<div style="height:100%;width:' + conf + '%;background:' + confCol + ';border-radius:2px;"></div>' +
       '</div>' +
