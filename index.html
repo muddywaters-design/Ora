@@ -1996,11 +1996,6 @@ async function apiCall(messages, useSearch, maxTokens) {
   }
 }
 
-async function searchThenSummarize(prompt, maxTokens) {
-  // No web_search — single plain call to stay within token limits
-  return toJSON(prompt, maxTokens || 1500);
-}
-
 async function toJSON(prompt, useSearch) {
   const d = await apiCall([{ role: 'user', content: prompt }], useSearch || false, 4000);
   return d.content.filter(b => b.type === 'text').map(b => b.text).join('');
@@ -2142,6 +2137,108 @@ function escapeHTML(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// === Composite Factor Score (Fama-French-Carhart, institutional-style) ===
+// Computes 5 academically-documented equity factors from data we already fetch.
+// Each sub-score is 0-100 (50 = neutral). The composite is regime-weighted.
+// Honest scope: cross-sectional percentile data isn't free, so Value/Quality use
+// absolute thresholds calibrated to broad-market norms (not point-in-time sector ranks).
+// This is a transparent heuristic mapping, NOT a survivorship-bias-free factor model.
+function calculateFactorScores(fh, closes, spyRegime) {
+  if (!fh && (!closes || closes.length < 30)) return null;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const out = { factors: {}, available: [] };
+
+  // ── QUALITY (RMW) — the single most consistent premium since 1963 ──
+  // ROE, net margin, gross margin → higher = more profitable = higher quality.
+  if (fh && (fh.roeTTM != null || fh.netProfitMarginTTM != null)) {
+    let q = 50, n = 0;
+    if (fh.roeTTM != null)            { q += clamp((fh.roeTTM - 12) * 1.4, -25, 30); n++; } // ROE 12% ~ market avg
+    if (fh.netProfitMarginTTM != null){ q += clamp((fh.netProfitMarginTTM - 8) * 1.0, -18, 22); n++; }
+    if (fh.grossMarginTTM != null)    { q += clamp((fh.grossMarginTTM - 35) * 0.30, -12, 15); n++; }
+    if (fh.roaTTM != null)            { q += clamp((fh.roaTTM - 5) * 1.0, -10, 12); n++; }
+    if (n > 0) { out.factors.quality = Math.round(clamp(q, 0, 100)); out.available.push('quality'); }
+  }
+
+  // ── VALUE (HML) — cheap vs fundamentals. Lower P/E, P/B, P/S = more value. ──
+  if (fh && (fh.peTTM != null || fh.pbAnnual != null || fh.psTTM != null)) {
+    let v = 50, n = 0;
+    if (fh.peTTM != null && fh.peTTM > 0)   { v += clamp((20 - fh.peTTM) * 1.2, -25, 28); n++; } // P/E 20 ~ neutral
+    else if (fh.peTTM != null && fh.peTTM <= 0) { v -= 12; n++; } // negative earnings = not value, it's distress
+    if (fh.pbAnnual != null && fh.pbAnnual > 0) { v += clamp((2.5 - fh.pbAnnual) * 6, -18, 20); n++; }
+    if (fh.psTTM != null && fh.psTTM > 0)   { v += clamp((3 - fh.psTTM) * 4, -15, 16); n++; }
+    if (n > 0) { out.factors.value = Math.round(clamp(v, 0, 100)); out.available.push('value'); }
+  }
+
+  // ── MOMENTUM (Carhart) — academic def: 12-month return excluding most recent month ──
+  if (closes && closes.length >= 252) {
+    const p_now = closes[closes.length - 1 - 21]; // skip last ~21 days (1 month)
+    const p_then = closes[closes.length - 252];   // ~12 months ago
+    if (p_now && p_then) {
+      const mom12_1 = ((p_now - p_then) / p_then) * 100;
+      out.factors.momentum = Math.round(clamp(50 + mom12_1 * 0.7, 0, 100));
+      out.available.push('momentum');
+    }
+  } else if (closes && closes.length >= 130) {
+    // Fallback: 6-month momentum if <1yr history (clearly weaker proxy)
+    const p_now = closes[closes.length - 1 - 21];
+    const p_then = closes[closes.length - 126];
+    if (p_now && p_then) {
+      const mom6 = ((p_now - p_then) / p_then) * 100;
+      out.factors.momentum = Math.round(clamp(50 + mom6 * 0.9, 0, 100));
+      out.available.push('momentum');
+      out._momentumProxy = '6mo';
+    }
+  }
+
+  // ── INVESTMENT (CMA) — conservative (low asset growth) outperforms aggressive ──
+  // Proxy via revenue growth: extreme growth often = aggressive expansion (CMA penalty),
+  // but we keep this mild since revenue growth is also a positive signal elsewhere.
+  if (fh && fh.revenueGrowthTTMYoy != null) {
+    const g = fh.revenueGrowthTTMYoy;
+    // Sweet spot ~10-25%; hyper-growth (>50%) flagged conservative-negative per CMA
+    let inv = 50;
+    if (g > 50) inv = 38;
+    else if (g >= 8 && g <= 30) inv = 62;
+    else if (g < 0) inv = 44;
+    out.factors.investment = Math.round(inv);
+    out.available.push('investment');
+  }
+
+  // ── LOW VOLATILITY — the anomaly Fama-French omit: low-vol beats high-vol ──
+  if (closes && closes.length >= 30) {
+    const w = closes.slice(-60);
+    const rets = [];
+    for (let i = 1; i < w.length; i++) if (w[i-1]) rets.push((w[i] - w[i-1]) / w[i-1]);
+    if (rets.length >= 20) {
+      const mean = rets.reduce((a,b)=>a+b,0)/rets.length;
+      const sd = Math.sqrt(rets.reduce((a,b)=>a+(b-mean)**2,0)/rets.length) * Math.sqrt(252) * 100; // annualized %
+      // ~15% annual vol ~ market; lower = better score
+      out.factors.lowVol = Math.round(clamp(50 + (25 - sd) * 1.2, 0, 100));
+      out.available.push('lowVol');
+      out._annVolPct = sd;
+    }
+  }
+
+  if (out.available.length === 0) return null;
+
+  // ── Regime-weighted composite ──
+  // Bear/risk-off: tilt to Quality + Value + LowVol (defensive).
+  // Bull: tilt to Momentum. Neutral: balanced.
+  const bearish = spyRegime?.regime === 'bearish';
+  const W = bearish
+    ? { quality: 0.30, value: 0.25, momentum: 0.10, investment: 0.10, lowVol: 0.25 }
+    : { quality: 0.25, value: 0.15, momentum: 0.30, investment: 0.10, lowVol: 0.20 };
+  let sum = 0, wsum = 0;
+  for (const f of out.available) { sum += out.factors[f] * (W[f]||0); wsum += (W[f]||0); }
+  out.composite = wsum > 0 ? Math.round(sum / wsum) : 50;
+  out.regimeUsed = bearish ? 'defensive' : 'growth';
+
+  // QARP flag: Quality-At-a-Reasonable-Price (Greenblatt-style) — high quality + not expensive
+  out.qarp = (out.factors.quality != null && out.factors.value != null &&
+              out.factors.quality >= 62 && out.factors.value >= 45);
+  return out;
+}
+
 // === Data Quality Layer ===
 // Scores how complete this analysis's inputs are (0-100). Missing blocks reduce
 // confidence and are disclosed to the AI so it doesn't infer absent dimensions.
@@ -2268,6 +2365,21 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     if (riskOff) m += ' MACRO-DIRECTIVE: broad market deteriorating — do NOT issue new bullish entry signals unless the stock shows exceptional relative strength and overwhelming evidence; prefer NEUTRAL.';
     return m;
   })();
+  // Factor scores — computed deterministically; the AI interprets them, never invents them
+  const _fs = calculateFactorScores(fhData, liveData?._closes, macroData ? { regime: (liveData?._spyRegimeRef || macroData?.regime) } : null);
+  const factorCtx = _fs ? (() => {
+    const f = _fs.factors;
+    const parts = [];
+    if (f.quality != null)    parts.push('Quality:' + f.quality);
+    if (f.value != null)      parts.push('Value:' + f.value);
+    if (f.momentum != null)   parts.push('Momentum:' + f.momentum + (_fs._momentumProxy ? '(6mo-proxy)' : ''));
+    if (f.investment != null) parts.push('Investment:' + f.investment);
+    if (f.lowVol != null)     parts.push('LowVol:' + f.lowVol);
+    return 'FACTOR-SCORES(0-100,50=neutral,' + _fs.regimeUsed + '-weighted): ' + parts.join(',') +
+      '. Composite:' + _fs.composite + (_fs.qarp ? '. QARP=TRUE(high-quality+reasonably-priced — Greenblatt signal)' : '') +
+      '. These are computed quant factors (Fama-French-Carhart style); weight them in your thesis but note Quality is the historically strongest premium. Do NOT recompute or contradict these numbers.';
+  })() : '';
+
   // Data quality: compute once, stash for the attach phase, disclose gaps to the AI
   const _dq = validateDataQuality(liveData, insiderData, trendsData, shortData, optionsData, macroData);
   if (liveData) liveData._dq = _dq;
@@ -2451,7 +2563,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
   const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
   const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level, fundamental_outlook.summary, full_analysis) IN HEBREW. Numbers, tickers, and verdict codes stay in English.' : '';
-  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx} ${macroCtx} ${performanceCtx} ${pennyCtx} ${dataQualityCtx}
+  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx} ${macroCtx} ${factorCtx} ${performanceCtx} ${pennyCtx} ${dataQualityCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","fundamental_outlook":{"summary":"2-3 sentences on financial health","health_score":"1-10","bull_target_pct":"+X%","bear_target_pct":"-X%","base_case_pct":"+/-X%","verdict":"STRONG|HEALTHY|MIXED|WEAK|RISKY"},"full_analysis":"3 sentences."}`;
 }
@@ -4022,6 +4134,56 @@ function calcRelativeStrength(stockCloses, spyCloses) {
   return out;
 }
 
+// === Beta / Alpha vs SPY (CAPM regression — institutional risk metrics) ===
+// Linear regression of stock daily returns on SPY daily returns over ~90 days:
+//   beta  = slope = systematic risk (1.0 = moves with market; >1 amplified; <1 defensive)
+//   alpha = intercept, annualized = risk-adjusted excess return (Jensen's alpha)
+//   r2    = how much of the stock's movement SPY explains (0-1)
+// Uses a daily risk-free proxy so alpha is a true CAPM intercept, not raw outperformance.
+function calcBetaAlpha(stockCloses, spyCloses, annualRiskFree) {
+  if (!Array.isArray(stockCloses) || !Array.isArray(spyCloses)) return null;
+  // Align from the most recent end, equal length, cap at ~90 sessions
+  const n = Math.min(stockCloses.length, spyCloses.length);
+  if (n < 30) return null;
+  const span = Math.min(n, 91); // ~90 daily returns
+  const s = stockCloses.slice(n - span);
+  const m = spyCloses.slice(n - span);
+
+  const rs = [], rm = [];
+  for (let i = 1; i < span; i++) {
+    if (s[i-1] && m[i-1]) {
+      rs.push((s[i] - s[i-1]) / s[i-1]);
+      rm.push((m[i] - m[i-1]) / m[i-1]);
+    }
+  }
+  const k = rs.length;
+  if (k < 20) return null;
+
+  const meanS = rs.reduce((a,b)=>a+b,0) / k;
+  const meanM = rm.reduce((a,b)=>a+b,0) / k;
+  let cov = 0, varM = 0, varS = 0;
+  for (let i = 0; i < k; i++) {
+    const dm = rm[i] - meanM, ds = rs[i] - meanS;
+    cov += dm * ds; varM += dm * dm; varS += ds * ds;
+  }
+  if (varM === 0 || varS === 0) return null;
+
+  const beta = cov / varM;
+  // Daily risk-free (annual → daily); default ~4.5%/yr if not provided
+  const rfDaily = ((annualRiskFree != null ? annualRiskFree : 4.5) / 100) / 252;
+  // Jensen's alpha (daily intercept): meanS - [rf + beta*(meanM - rf)]
+  const alphaDaily = meanS - (rfDaily + beta * (meanM - rfDaily));
+  const alphaAnnualPct = alphaDaily * 252 * 100; // annualized %
+  const r2 = (cov * cov) / (varM * varS); // coefficient of determination
+
+  return {
+    beta: Math.round(beta * 100) / 100,
+    alphaAnnualPct: Math.round(alphaAnnualPct * 10) / 10,
+    r2: Math.round(r2 * 100) / 100,
+    samples: k,
+  };
+}
+
 // === Pearson Correlation (concentration-risk filter) ===
 // Measures how closely two price series move together. r near +1 = highly correlated
 // (low diversification benefit); r near 0 = independent; negative = hedge.
@@ -4157,7 +4319,6 @@ function formatMarketCap(n) {
   if (n >= 1e6)  return (n/1e6).toFixed(2)+'M';
   return n.toString();
 }
-async function fetchFundamentals() { return {}; }
 
 // ── Fear & Greed Index ────────────────────────────────────────
 // ── Run Analysis ───────────────────────────────────────────────
@@ -4492,6 +4653,11 @@ async function runAnalysis(sym) {
       if (parsed._spyRegime?.closes && cl.length >= 6) {
         parsed._relStrength = calcRelativeStrength(cl, parsed._spyRegime.closes);
       }
+      // Beta / Alpha vs SPY (CAPM regression) — systematic risk + risk-adjusted excess return
+      if (parsed._spyRegime?.closes && cl.length >= 30) {
+        const rf = (parsed._macroData?.tnx != null && parsed._macroData.tnx < 15) ? parsed._macroData.tnx : 4.5;
+        parsed._betaAlpha = calcBetaAlpha(cl, parsed._spyRegime.closes, rf);
+      }
       // Statistical probability cone (1-SD bounds) for reality-checking AI targets
       const pr2 = parseFloat(liveData?.price) || cl[cl.length-1];
       parsed._probCone = calcProbabilityCone(cl, pr2);
@@ -4504,6 +4670,11 @@ async function runAnalysis(sym) {
     parsed._fhInsider = fhInsider;
     parsed._fhFinancials = fhFinancials;
     parsed._secData = secData;
+    // Composite factor score (Fama-French-Carhart style) — computed from real fundamentals + price
+    try {
+      const _fCloses = liveData?._closes || (Array.isArray(liveData?._closes30) ? liveData._closes30 : null);
+      parsed._factorScores = calculateFactorScores(fhFinancials, liveData?._closes || _fCloses, parsed._spyRegime);
+    } catch(_) { parsed._factorScores = null; }
     renderAnalysis(t, parsed);
     document.getElementById('liveLabel').textContent = 'LIVE';
   } catch (e) {
@@ -5269,6 +5440,81 @@ function renderAnalysis(ticker, d) {
         '</div>';
       }
       return '<div class="card"><div class="ch">📐 ' + (he?'תנודתיות ומומנטום':'Volatility & Momentum') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div><div class="cb">' + rows + '</div></div>';
+    })()}
+
+    ${(() => {
+      // Composite Factor Score card (Fama-French-Carhart) — institutional-style
+      if (!d._factorScores) return '';
+      const he = langMode === 'he';
+      const fs = d._factorScores;
+      const labels = he
+        ? { quality:'איכות', value:'ערך', momentum:'מומנטום', investment:'השקעה', lowVol:'תנודתיות נמוכה' }
+        : { quality:'Quality', value:'Value', momentum:'Momentum', investment:'Investment', lowVol:'Low Vol' };
+      const desc = he
+        ? { quality:'רווחיות (הפקטור החזק ביותר)', value:'מחיר מול שווי', momentum:'מגמת 12 חודשים', investment:'משמעת הון', lowVol:'יציבות' }
+        : { quality:'profitability (strongest premium)', value:'price vs fundamentals', momentum:'12-mo trend', investment:'capital discipline', lowVol:'stability' };
+      const bar = (key) => {
+        const v = fs.factors[key];
+        if (v == null) return '';
+        const col = v >= 65 ? 'var(--green)' : v >= 45 ? 'var(--yellow)' : 'var(--red)';
+        return '<div style="margin-bottom:8px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;">' +
+            '<span style="font-size:11px;color:var(--t2);font-weight:600;">' + labels[key] + (key==='momentum'&&fs._momentumProxy?' *':'') + '</span>' +
+            '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + col + ';">' + v + '</span>' +
+          '</div>' +
+          '<div style="height:5px;background:var(--b2);border-radius:3px;overflow:hidden;">' +
+            '<div style="height:100%;width:' + v + '%;background:' + col + ';border-radius:3px;"></div>' +
+          '</div>' +
+          '<div style="font-size:8px;color:var(--t3);margin-top:2px;">' + desc[key] + '</div>' +
+        '</div>';
+      };
+      const compCol = fs.composite >= 65 ? 'var(--green)' : fs.composite >= 45 ? 'var(--yellow)' : 'var(--red)';
+      return '<div class="card"><div class="ch">🎓 ' + (he?'ציון פקטורים מורכב':'Composite Factor Score') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div>' +
+        '<div class="cb">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:8px;background:var(--bg);border-radius:8px;">' +
+            '<div><div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;">' + (he?'ציון כולל':'Composite') + ' · ' + (fs.regimeUsed==='defensive'?(he?'הגנתי':'defensive'):(he?'צמיחה':'growth')) + '</div>' +
+            (fs.qarp ? '<div style="font-size:9px;color:var(--green);margin-top:2px;">⭐ QARP — ' + (he?'איכות במחיר סביר':'Quality at Reasonable Price') + '</div>' : '') + '</div>' +
+            '<div style="font-family:var(--mono);font-size:26px;font-weight:700;color:' + compCol + ';">' + fs.composite + '</div>' +
+          '</div>' +
+          bar('quality') + bar('value') + bar('momentum') + bar('investment') + bar('lowVol') +
+          (fs._momentumProxy ? '<div style="font-size:8px;color:var(--t3);font-style:italic;margin-top:2px;">* ' + (he?'מומנטום מבוסס 6 חודשים (היסטוריה <שנה)':'momentum uses 6mo (history <1yr)') + '</div>' : '') +
+          '<div style="font-size:8px;color:var(--t3);margin-top:6px;font-style:italic;">' + (he?'פקטורים בסגנון Fama-French-Carhart. 50=ניטרלי. משוקלל לפי משטר השוק.':'Fama-French-Carhart style factors. 50=neutral. Regime-weighted.') + '</div>' +
+        '</div></div>';
+    })()}
+
+    ${(() => {
+      // Beta / Alpha vs SPY (CAPM) — systematic risk + risk-adjusted excess return
+      if (!d._betaAlpha) return '';
+      const he = langMode === 'he';
+      const ba = d._betaAlpha;
+      // Beta interpretation
+      const betaCol = ba.beta > 1.3 ? 'var(--red)' : ba.beta < 0.7 ? 'var(--blue)' : 'var(--t1)';
+      const betaLabel = ba.beta < 0 ? (he?'הפוך לשוק':'inverse')
+                      : ba.beta > 1.3 ? (he?'אגרסיבי':'aggressive')
+                      : ba.beta < 0.7 ? (he?'הגנתי':'defensive')
+                      : (he?'בקו עם השוק':'market-like');
+      // Alpha interpretation (risk-adjusted excess return)
+      const alphaCol = ba.alphaAnnualPct > 2 ? 'var(--green)' : ba.alphaAnnualPct < -2 ? 'var(--red)' : 'var(--t1)';
+      // R² — how meaningful beta/alpha are (low R² = SPY barely explains this stock)
+      const r2Note = ba.r2 < 0.3 ? (he?' (R² נמוך — תנועה עצמאית)':' (low R² — independent mover)') : '';
+      return '<div class="card"><div class="ch">📐 ' + (he?'ביתא / אלפא מול SPY':'Beta / Alpha vs SPY') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CAPM</span></div>' +
+        '<div class="cb">' +
+          '<div style="display:flex;gap:8px;">' +
+            '<div style="flex:1;text-align:center;padding:10px;background:var(--bg);border-radius:8px;">' +
+              '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;">' + (he?'ביתא':'Beta') + '</div>' +
+              '<div style="font-family:var(--mono);font-size:20px;font-weight:700;color:' + betaCol + ';margin-top:2px;">' + ba.beta.toFixed(2) + '</div>' +
+              '<div style="font-size:8px;color:' + betaCol + ';">' + betaLabel + '</div>' +
+            '</div>' +
+            '<div style="flex:1;text-align:center;padding:10px;background:var(--bg);border-radius:8px;">' +
+              '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;">' + (he?'אלפא (שנתי)':'Alpha (ann.)') + '</div>' +
+              '<div style="font-family:var(--mono);font-size:20px;font-weight:700;color:' + alphaCol + ';margin-top:2px;">' + (ba.alphaAnnualPct>=0?'+':'') + ba.alphaAnnualPct.toFixed(1) + '%</div>' +
+              '<div style="font-size:8px;color:var(--t3);">' + (he?'מותאם סיכון':'risk-adjusted') + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' +
+            (he?('ביתא = רגישות לשוק (1.0 = זז עם השוק). אלפא = תשואה עודפת אחרי התאמה לסיכון. R²=' + ba.r2.toFixed(2) + r2Note):('Beta = market sensitivity (1.0 = moves with market). Alpha = excess return after risk adjustment. R²=' + ba.r2.toFixed(2) + r2Note)) +
+          '</div>' +
+        '</div></div>';
     })()}
 
     ${(() => {
