@@ -4066,27 +4066,83 @@ function calcSMADistance(closes) {
 // Uses the standard deviation of daily returns to project a ~68% (1-SD) range
 // for where price should realistically trade. Scales by √(trading days).
 // This gives a mathematical reality-check against the LLM's target guesses.
+// === Statistics Toolkit (institutional-grade volatility primitives) ===
+// Shared helpers used by the cone, ATR context, beta, and portfolio analytics.
+
+// Log returns: r = ln(P_t / P_t-1). Additive across time and the correct base
+// for volatility math (vs simple returns which compound). Filters non-positive prices.
+function toLogReturns(closes) {
+  if (!Array.isArray(closes) || closes.length < 2) return [];
+  const out = [];
+  for (let i = 1; i < closes.length; i++) {
+    const a = closes[i-1], b = closes[i];
+    if (a > 0 && b > 0) out.push(Math.log(b / a));
+  }
+  return out;
+}
+
+// MAD-based outlier filter (Median Absolute Deviation — robust to fat tails,
+// unlike mean/stddev which the outliers themselves distort). Removes points
+// beyond `thresh` modified z-scores. Default 3.5 per Iglewicz & Hoaglin.
+function filterOutliersMAD(values, thresh) {
+  if (!Array.isArray(values) || values.length < 8) return values || [];
+  const t = thresh || 3.5;
+  const sorted = [...values].sort((a,b) => a - b);
+  const median = sorted[Math.floor(sorted.length/2)];
+  const absDevs = values.map(v => Math.abs(v - median)).sort((a,b) => a - b);
+  const mad = absDevs[Math.floor(absDevs.length/2)];
+  if (mad === 0) return values; // no spread → nothing to filter
+  // 0.6745 scales MAD to be consistent with the stddev of a normal distribution
+  return values.filter(v => Math.abs(0.6745 * (v - median) / mad) <= t);
+}
+
+// EWMA volatility (RiskMetrics / JP Morgan standard). Recent observations get
+// exponentially more weight via lambda (0.94 ≈ ~30-day half-life, the RiskMetrics
+// default for daily data). Returns the daily stddev of returns. More responsive
+// to regime shifts than equal-weighted stddev.
+function ewmaVolatility(returns, lambda) {
+  if (!Array.isArray(returns) || returns.length < 5) return null;
+  const lam = lambda || 0.94;
+  // Seed variance with the simple variance of the first chunk
+  const seed = returns.slice(0, Math.min(returns.length, 10));
+  const seedMean = seed.reduce((a,b)=>a+b,0) / seed.length;
+  let variance = seed.reduce((a,b)=>a+(b-seedMean)**2,0) / seed.length;
+  // Recursively update: var_t = lambda*var_t-1 + (1-lambda)*r_t^2
+  for (let i = 1; i < returns.length; i++) {
+    variance = lam * variance + (1 - lam) * returns[i] * returns[i];
+  }
+  return Math.sqrt(variance); // daily volatility (in return units)
+}
+
 function calcProbabilityCone(closes, price) {
   if (!Array.isArray(closes) || closes.length < 15 || !price) return null;
-  const rets = [];
-  const w = closes.slice(-30); // up to 30 days of returns
-  for (let i = 1; i < w.length; i++) {
-    if (w[i-1]) rets.push((w[i] - w[i-1]) / w[i-1]);
-  }
+  // Use up to 60 days for a more stable EWMA estimate; log returns are the
+  // correct base for volatility; MAD strips data-spike outliers first.
+  const w = closes.slice(-60);
+  let rets = toLogReturns(w);
   if (rets.length < 10) return null;
-  const mean = rets.reduce((a,b)=>a+b,0) / rets.length;
-  const variance = rets.reduce((a,b)=>a+(b-mean)**2,0) / rets.length;
-  const dailyStd = Math.sqrt(variance); // daily volatility (fraction)
+  rets = filterOutliersMAD(rets, 3.5);
+  if (rets.length < 8) return null;
+  // EWMA daily volatility (RiskMetrics) — weights recent days more.
+  // Falls back to equal-weighted stddev if EWMA can't compute.
+  let dailyStd = ewmaVolatility(rets, 0.94);
+  if (dailyStd == null) {
+    const mean = rets.reduce((a,b)=>a+b,0) / rets.length;
+    dailyStd = Math.sqrt(rets.reduce((a,b)=>a+(b-mean)**2,0) / rets.length);
+  }
   const cone = (tradingDays) => {
-    const sd = dailyStd * Math.sqrt(tradingDays); // scale by √time
+    // Log-space √t scaling; convert back to price via exp() so the band is
+    // correctly asymmetric (downside can't exceed -100%, upside is unbounded).
+    const sd = dailyStd * Math.sqrt(tradingDays);
     return {
-      lower: price * (1 - sd),
-      upper: price * (1 + sd),
+      lower: price * Math.exp(-sd),
+      upper: price * Math.exp(sd),
       pct: sd * 100,
     };
   };
   return {
     dailyVolPct: dailyStd * 100,
+    method: 'EWMA log-returns',
     week: cone(5),       // ~5 trading days
     month: cone(21),     // ~21 trading days
     halfYear: cone(126), // ~126 trading days
@@ -8748,6 +8804,189 @@ function renderPortfolioTabs() {
   if (titleEl && activeName) titleEl.textContent = activeName;
 }
 
+// === Portfolio Risk Analytics (institutional metrics) ===
+// Computed on demand (fetches per-position data, reusing the cached price layer).
+// Produces portfolio beta, volatility, Sharpe, parametric VaR, and concentration.
+async function computePortfolioAnalytics() {
+  const btn = document.getElementById('portAnalyticsBtn');
+  const out = document.getElementById('portAnalyticsResult');
+  if (!out) return;
+  const positions = (portfolio?.positions) || [];
+  if (positions.length === 0) { out.innerHTML = ''; return; }
+
+  if (btn) { btn.disabled = true; btn.textContent = (langMode==='he'?'מחשב…':'Computing…'); }
+  out.innerHTML = '<div style="padding:14px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--t3);">' + (langMode==='he'?'מושך נתונים ומחשב סיכון…':'Fetching data & computing risk…') + '</div>';
+
+  try {
+    // Fetch closes + beta for each position (cached layer keeps this cheap)
+    const enriched = await Promise.allSettled(
+      positions.map(async p => {
+        const live = await fetchLivePrice(p.ticker);
+        return {
+          ticker: p.ticker,
+          value: p.currentPrice * p.shares,
+          beta: parseFloat(live?.beta) || null,
+          closes: Array.isArray(live?._closes) ? live._closes : null,
+        };
+      })
+    );
+    const rows = enriched.filter(r => r.status === 'fulfilled').map(r => r.value);
+    const totalVal = rows.reduce((a, r) => a + r.value, 0);
+    if (totalVal <= 0) { out.innerHTML = '<div style="padding:12px;color:var(--t3);font-size:11px;">' + (langMode==='he'?'אין מספיק נתונים':'Not enough data') + '</div>'; return; }
+
+    // Weights
+    rows.forEach(r => r.weight = r.value / totalVal);
+
+    // ── Portfolio Beta = Σ(weight × beta) ──
+    const betaRows = rows.filter(r => r.beta != null);
+    const betaCoverage = betaRows.reduce((a, r) => a + r.weight, 0);
+    const portBeta = betaCoverage > 0
+      ? betaRows.reduce((a, r) => a + r.weight * r.beta, 0) / betaCoverage
+      : null;
+
+    // ── Per-position log-return series (MAD-cleaned), aligned to shortest length ──
+    const retRows = rows.filter(r => r.closes && r.closes.length >= 25)
+      .map(r => ({ ...r, rets: filterOutliersMAD(toLogReturns(r.closes.slice(-60)), 3.5) }))
+      .filter(r => r.rets.length >= 20);
+
+    let portVolAnnual = null, portSharpe = null, var95_1d = null, var95_1m = null, corrMatrix = null;
+    if (retRows.length >= 1) {
+      const minLen = Math.min(...retRows.map(r => r.rets.length));
+      retRows.forEach(r => r.rets = r.rets.slice(-minLen));
+      const wsum = retRows.reduce((a, r) => a + r.weight, 0);
+      retRows.forEach(r => r.w = r.weight / wsum); // renormalize across covered positions
+
+      // Means for each position
+      retRows.forEach(r => { r.mean = r.rets.reduce((a,b)=>a+b,0) / r.rets.length; });
+
+      // Covariance matrix (equal-weighted, consistent basis) → portfolio variance = wᵀΣw.
+      // Correlations are derived from this SAME matrix so they're guaranteed in [-1,1].
+      const n = retRows.length;
+      const covM = [];
+      for (let i = 0; i < n; i++) {
+        covM[i] = [];
+        for (let j = 0; j < n; j++) {
+          let s = 0;
+          for (let k = 0; k < minLen; k++) s += (retRows[i].rets[k]-retRows[i].mean)*(retRows[j].rets[k]-retRows[j].mean);
+          covM[i][j] = s / minLen;
+        }
+      }
+      let portVar = 0;
+      for (let i = 0; i < n; i++)
+        for (let j = 0; j < n; j++)
+          portVar += retRows[i].w * retRows[j].w * covM[i][j];
+      const portVolDaily = Math.sqrt(Math.max(0, portVar));
+      portVolAnnual = portVolDaily * Math.sqrt(252) * 100; // %
+
+      // Correlation matrix from the same covariance matrix (clamped to [-1,1])
+      corrMatrix = [];
+      for (let i = 0; i < n; i++) {
+        const rowC = [];
+        for (let j = 0; j < n; j++) {
+          const denom = Math.sqrt(covM[i][i] * covM[j][j]);
+          let corr = denom > 0 ? covM[i][j] / denom : (i===j?1:0);
+          corr = Math.max(-1, Math.min(1, corr)); // numerical safety
+          rowC.push(corr);
+        }
+        corrMatrix.push(rowC);
+      }
+
+      // Portfolio expected daily return (weighted) → annualized; Sharpe vs ~4.5% RF
+      const portMeanDaily = retRows.reduce((a, r) => a + r.w * r.mean, 0);
+      const portRetAnnual = portMeanDaily * 252 * 100;
+      const rf = 4.5;
+      portSharpe = portVolAnnual > 0 ? (portRetAnnual - rf) / portVolAnnual : null;
+
+      // Parametric VaR (95%, z=1.645): potential loss in $ over horizon
+      const z = 1.645;
+      var95_1d = z * portVolDaily * totalVal;                 // 1-day
+      var95_1m = z * portVolDaily * Math.sqrt(21) * totalVal; // ~1-month
+      retRows.forEach(r => { r.corrTicker = r.ticker; }); // label for matrix
+    }
+
+    // ── Concentration: largest weight + Herfindahl-Hirschman Index ──
+    const sortedW = [...rows].sort((a,b) => b.weight - a.weight);
+    const maxWeight = sortedW[0].weight * 100;
+    const top3 = sortedW.slice(0,3).reduce((a,r)=>a+r.weight,0) * 100;
+    const hhi = rows.reduce((a, r) => a + r.weight * r.weight, 0); // 1=single stock, 1/n=equal
+    const effectiveN = 1 / hhi; // effective number of independent positions
+    const concentrationLevel = maxWeight > 40 || hhi > 0.4 ? 'high' : maxWeight > 25 || hhi > 0.25 ? 'moderate' : 'diversified';
+
+    renderPortfolioAnalytics({
+      portBeta, betaCoverage, portVolAnnual, portSharpe, var95_1d, var95_1m,
+      maxWeight, top3, effectiveN, concentrationLevel, totalVal,
+      corrMatrix, retRows, posCount: positions.length, coveredCount: retRows.length,
+    });
+  } catch(e) {
+    out.innerHTML = '<div style="padding:12px;color:var(--red);font-size:11px;">⚠️ ' + (langMode==='he'?'שגיאה בחישוב':'Computation error') + '</div>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = (langMode==='he'?'📊 חשב אנליטיקת סיכון':'📊 Compute Risk Analytics'); }
+  }
+}
+
+function renderPortfolioAnalytics(a) {
+  const out = document.getElementById('portAnalyticsResult');
+  if (!out) return;
+  const he = langMode === 'he';
+  const card = (label, value, color, sub) =>
+    '<div style="background:var(--s2);border-radius:8px;padding:10px;">' +
+      '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px;">' + label + '</div>' +
+      '<div style="font-family:var(--mono);font-size:15px;font-weight:700;color:' + (color||'var(--t1)') + ';">' + value + '</div>' +
+      (sub ? '<div style="font-size:8px;color:var(--t3);margin-top:2px;">' + sub + '</div>' : '') +
+    '</div>';
+
+  const betaCol = a.portBeta == null ? 'var(--t3)' : a.portBeta > 1.2 ? 'var(--red)' : a.portBeta < 0.8 ? 'var(--blue)' : 'var(--t1)';
+  const concCol = a.concentrationLevel === 'high' ? 'var(--red)' : a.concentrationLevel === 'moderate' ? 'var(--yellow)' : 'var(--green)';
+  const sharpeCol = a.portSharpe == null ? 'var(--t3)' : a.portSharpe >= 1 ? 'var(--green)' : a.portSharpe >= 0 ? 'var(--yellow)' : 'var(--red)';
+
+  let html = '<div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:14px;margin-bottom:16px;">' +
+    '<div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:10px;">📊 ' + (he?'אנליטיקת סיכון תיק':'Portfolio Risk Analytics') + '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
+      card(he?'ביתא תיק':'Portfolio Beta', a.portBeta != null ? a.portBeta.toFixed(2) : 'N/A', betaCol, a.portBeta != null ? (a.portBeta > 1.2 ? (he?'תנודתי מהשוק':'more volatile than market') : a.portBeta < 0.8 ? (he?'הגנתי':'defensive') : (he?'בקו עם השוק':'market-like')) : (he?'אין ביתא':'no beta data')) +
+      card(he?'תנודתיות שנתית':'Annual Volatility', a.portVolAnnual != null ? a.portVolAnnual.toFixed(1)+'%' : 'N/A', 'var(--t1)', he?'EWMA + קורלציות':'EWMA + correlations') +
+      card('Sharpe', a.portSharpe != null ? a.portSharpe.toFixed(2) : 'N/A', sharpeCol, he?'תשואה/סיכון (RF 4.5%)':'return/risk (RF 4.5%)') +
+      card(he?'ריכוזיות':'Concentration', a.maxWeight.toFixed(0)+'%', concCol, (he?'הגדולה ביותר · ':'largest · ') + (he?'מס\' אפקטיבי ':'eff. N ') + a.effectiveN.toFixed(1)) +
+    '</div>';
+
+  // VaR row
+  if (a.var95_1d != null) {
+    html += '<div style="margin-top:8px;padding:10px;background:var(--bg);border-radius:8px;">' +
+      '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;margin-bottom:5px;">' + (he?'ערך בסיכון (VaR 95%)':'Value at Risk (95%)') + '</div>' +
+      '<div style="display:flex;justify-content:space-between;">' +
+        '<span style="font-family:var(--mono);font-size:12px;color:var(--red);">1' + (he?' יום':'-day') + ': -$' + Math.round(a.var95_1d).toLocaleString() + '</span>' +
+        '<span style="font-family:var(--mono);font-size:12px;color:var(--red);">1' + (he?' חודש':'-month') + ': -$' + Math.round(a.var95_1m).toLocaleString() + '</span>' +
+      '</div>' +
+      '<div style="font-size:8px;color:var(--t3);margin-top:4px;font-style:italic;">' + (he?'הפסד פוטנציאלי מקסימלי ב-95% מהמקרים (פרמטרי, נורמלי)':'Max expected loss in 95% of cases (parametric, normal assumption)') + '</div>' +
+    '</div>';
+  }
+
+  // Correlation matrix (compact) — only if 2-6 positions covered
+  if (a.corrMatrix && a.retRows && a.retRows.length >= 2 && a.retRows.length <= 6) {
+    const tk = a.retRows.map(r => r.ticker);
+    let m = '<div style="margin-top:8px;overflow-x:auto;"><div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;margin-bottom:5px;">' + (he?'מטריצת קורלציה':'Correlation Matrix') + '</div>';
+    m += '<table style="border-collapse:collapse;font-family:var(--mono);font-size:9px;"><tr><td></td>';
+    tk.forEach(t => m += '<td style="padding:3px 5px;color:var(--t3);font-weight:700;">' + escapeHTML(t) + '</td>');
+    m += '</tr>';
+    for (let i = 0; i < tk.length; i++) {
+      m += '<tr><td style="padding:3px 5px;color:var(--t3);font-weight:700;">' + escapeHTML(tk[i]) + '</td>';
+      for (let j = 0; j < tk.length; j++) {
+        const v = a.corrMatrix[i][j];
+        const col = i===j ? 'var(--t3)' : v > 0.6 ? 'var(--red)' : v < 0.2 ? 'var(--green)' : 'var(--t2)';
+        m += '<td style="padding:3px 5px;color:' + col + ';text-align:center;">' + v.toFixed(2) + '</td>';
+      }
+      m += '</tr>';
+    }
+    m += '</table><div style="font-size:8px;color:var(--t3);margin-top:4px;font-style:italic;">' + (he?'אדום = מתואם גבוה (פחות פיזור). ירוק = פיזור טוב.':'Red = highly correlated (less diversified). Green = good diversification.') + '</div></div>';
+    html += m;
+  }
+
+  if (a.coveredCount < a.posCount) {
+    html += '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?('* מבוסס על ' + a.coveredCount + ' מתוך ' + a.posCount + ' פוזיציות (לשאר אין מספיק היסטוריה)') : ('* based on ' + a.coveredCount + ' of ' + a.posCount + ' positions (others lack history)')) + '</div>';
+  }
+  html += '</div>';
+  out.innerHTML = html;
+}
+
 function renderPortfolio() {
   // Render portfolio tabs first
   renderPortfolioTabs();
@@ -8796,6 +9035,10 @@ function renderPortfolio() {
           <div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">${s.label}</div>
           <div style="font-family:var(--mono);font-size:16px;font-weight:700;color:${s.color};">${s.value}</div>
         </div>`).join('')}
+    </div>
+    <div id="portAnalyticsResult"></div>
+    <div style="text-align:center;margin-bottom:16px;">
+      <button id="portAnalyticsBtn" onclick="computePortfolioAnalytics()" style="background:var(--s2);border:1px solid var(--b2);color:var(--t2);padding:9px 18px;border-radius:8px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;">${langMode==='he'?'📊 חשב אנליטיקת סיכון':'📊 Compute Risk Analytics'}</button>
     </div>`;
 
   // Holdings table
