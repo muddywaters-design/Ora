@@ -685,17 +685,15 @@ document.getElementById('tickerInput').addEventListener('keydown', e => {
 function loadApiKey() {
   const key = localStorage.getItem('so_apikey') || '';
   const input = document.getElementById('apikeyInput');
-  const bar = document.getElementById('apikeyBar');
+  const bar = document.getElementById('apikeyBar'); // may be null (bar moved to API Keys page)
   const status = document.getElementById('apikeyStatus');
   if (key) {
-    input.value = key;
-    bar.classList.add('saved');
-    status.textContent = '✓ Saved';
-    status.style.color = 'var(--green)';
+    if (input) input.value = key;
+    if (bar) bar.classList.add('saved');
+    if (status) { status.textContent = '✓ Saved'; status.style.color = 'var(--green)'; }
   } else {
-    bar.classList.remove('saved');
-    status.textContent = 'Not set';
-    status.style.color = 'var(--t3)';
+    if (bar) bar.classList.remove('saved');
+    if (status) { status.textContent = 'Not set'; status.style.color = 'var(--t3)'; }
   }
 }
 
