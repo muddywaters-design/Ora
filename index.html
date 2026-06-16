@@ -414,6 +414,20 @@ body.lang-he .fc-tf {
       </div>
       <div id="apikeysExtraMount"></div>
 
+      <!-- Backup / Restore (survives cache clears) -->
+      <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:16px;margin-top:14px;">
+        <label style="display:block;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:3px;">💾 <span id="backupTitle">Backup & Restore</span></label>
+        <p id="backupIntro" style="font-size:10px;color:var(--t3);margin-bottom:10px;line-height:1.5;">Download your watchlist, portfolios & learning history to a file. This file survives browser cache clears — keep it safe and re-import anytime.</p>
+        <div id="backupReminder" style="display:none;background:rgba(255,193,7,.1);border:1px solid rgba(255,193,7,.3);color:var(--yellow);border-radius:8px;padding:8px 10px;font-size:10px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button onclick="exportBackup()" style="background:var(--green);border:none;color:#fff;padding:10px 18px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">⬇️ <span id="backupExportLabel">Export Backup</span></button>
+          <button onclick="document.getElementById('backupImportInput').click()" style="background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:10px 18px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">⬆️ <span id="backupImportLabel">Import Backup</span></button>
+          <input type="file" id="backupImportInput" accept="application/json,.json" style="display:none;" onchange="importBackupFile(this)">
+        </div>
+        <div id="backupStatus" style="font-family:var(--mono);font-size:10px;margin-top:8px;"></div>
+        <p id="backupNote" style="font-size:9px;color:var(--t3);margin-top:8px;font-style:italic;">Note: API keys are not included in the backup for security — re-enter them after a restore.</p>
+      </div>
+
       <p style="font-size:10px;color:var(--t3);line-height:1.6;margin-top:10px;font-style:italic;">Finnhub and Twelve Data are optional — they add news sentiment and extra price data. The app works without them using free sources.</p>
     </div>
   </div>
@@ -1821,6 +1835,11 @@ function translateLegend() {
   set('apikeysTitle','🔑 API Keys','🔑 מפתחות API');
   set('apikeysIntro',"Your keys are stored only in this browser (localStorage) and never sent anywhere except the provider's own API. Leave a field blank to skip that provider.",'המפתחות נשמרים רק בדפדפן הזה (localStorage) ולא נשלחים לשום מקום מלבד ה-API של הספק עצמו. השאר שדה ריק כדי לדלג על ספק.');
   set('nav-apikeys-label','API Keys','מפתחות API');
+  set('backupTitle','Backup & Restore','גיבוי ושחזור');
+  set('backupIntro','Download your watchlist, portfolios & learning history to a file. This file survives browser cache clears — keep it safe and re-import anytime.','הורד את רשימת המעקב, הפורטפוליו והיסטוריית הלמידה לקובץ. הקובץ הזה שורד ניקוי cache — שמור אותו וייבא בכל עת.');
+  set('backupExportLabel','Export Backup','ייצוא גיבוי');
+  set('backupImportLabel','Import Backup','ייבוא גיבוי');
+  set('backupNote','Note: API keys are not included in the backup for security — re-enter them after a restore.','הערה: מפתחות ה-API אינם נכללים בגיבוי מטעמי אבטחה — הזן אותם מחדש לאחר שחזור.');
   set('lg-web','Web Search','חיפוש ברשת'); set('lg-web-d','Let the model search live news (more accurate, uses more tokens)','מאפשר למודל לחפש חדשות בזמן אמת (מדויק יותר, צורך יותר טוקנים)');
   set('lg-finn','Finnhub','Finnhub'); set('lg-finn-d','Reliable prices + real news, analysts, insider & financials','מחירים אמינים + חדשות, אנליסטים, מנהלים ודוחות אמיתיים');
   set('lg-twelve','Twelve Data','Twelve Data'); set('lg-twelve-d','Real RSI & MACD indicators (works when Yahoo is blocked)','אינדיקטורים אמיתיים RSI ו-MACD (עובד כש-Yahoo חסום)');
@@ -1965,6 +1984,106 @@ renderWatchlist();
 setTimeout(autoCheckForecasts, 2000);
 
 // ── Navigation ─────────────────────────────────────────────────
+// === Backup / Restore (survives browser cache clears via a real downloaded file) ===
+// Exports the IRREPLACEABLE data (watchlist, portfolios, learning history, settings)
+// to a JSON file outside the browser. API keys are intentionally EXCLUDED for security.
+const BACKUP_KEYS = ['so_wl2','so_portfolios','so_active_portfolio','so_portfolio','so_forecast_history','so_lang','so_theme'];
+
+function exportBackup() {
+  const he = (typeof langMode !== 'undefined' && langMode === 'he');
+  try {
+    const data = {};
+    for (const k of BACKUP_KEYS) {
+      const v = localStorage.getItem(k);
+      if (v != null) data[k] = v;
+    }
+    const payload = {
+      app: 'StockOracle Pro',
+      type: 'backup',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      watchlistCount: (() => { try { return (JSON.parse(data.so_wl2||'[]')||[]).length; } catch(_) { return 0; } })(),
+      data,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().slice(0,10);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'stockoracle-backup-' + stamp + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // Record that a backup was made (clears the reminder)
+    try { localStorage.setItem('so_last_backup', Date.now().toString()); } catch(_) {}
+    const status = document.getElementById('backupStatus');
+    if (status) {
+      status.textContent = (he ? '✓ הגיבוי הורד לתיקיית ההורדות' : '✓ Backup downloaded to your Downloads folder');
+      status.style.color = 'var(--green)';
+    }
+    updateBackupReminder();
+  } catch(e) {
+    const status = document.getElementById('backupStatus');
+    if (status) { status.textContent = (he ? '⚠️ הייצוא נכשל' : '⚠️ Export failed'); status.style.color = 'var(--red)'; }
+  }
+}
+
+function importBackupFile(input) {
+  const he = (typeof langMode !== 'undefined' && langMode === 'he');
+  const status = document.getElementById('backupStatus');
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const payload = JSON.parse(e.target.result);
+      const data = payload.data || payload; // tolerate raw {key:value} too
+      // Validate it looks like our backup
+      const keysFound = BACKUP_KEYS.filter(k => data[k] != null);
+      if (keysFound.length === 0) {
+        if (status) { status.textContent = (he ? '⚠️ הקובץ אינו גיבוי תקין של StockOracle' : '⚠️ Not a valid StockOracle backup file'); status.style.color = 'var(--red)'; }
+        return;
+      }
+      const wlCount = (() => { try { return (JSON.parse(data.so_wl2||'[]')||[]).length; } catch(_) { return 0; } })();
+      const msg = he
+        ? ('לשחזר ' + wlCount + ' מניות במעקב + פורטפוליו והגדרות?\n\nפעולה זו תחליף את הנתונים הנוכחיים בדפדפן.')
+        : ('Restore ' + wlCount + ' watchlist stocks + portfolios and settings?\n\nThis will REPLACE your current browser data.');
+      if (!confirm(msg)) return;
+
+      for (const k of keysFound) {
+        try { localStorage.setItem(k, data[k]); } catch(_) {}
+      }
+      if (status) { status.textContent = (he ? '✓ שוחזר! טוען מחדש…' : '✓ Restored! Reloading…'); status.style.color = 'var(--green)'; }
+      // Reload so all in-memory state (watchlist, portfolio, settings) re-reads from storage
+      setTimeout(() => location.reload(), 800);
+    } catch(err) {
+      if (status) { status.textContent = (he ? '⚠️ קריאת הקובץ נכשלה' : '⚠️ Could not read the file'); status.style.color = 'var(--red)'; }
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Reminder: nudge the user to back up if they have data and haven't backed up in 7+ days.
+function updateBackupReminder() {
+  const he = (typeof langMode !== 'undefined' && langMode === 'he');
+  const el = document.getElementById('backupReminder');
+  if (!el) return;
+  let wlCount = 0;
+  try { wlCount = (JSON.parse(localStorage.getItem('so_wl2')||'[]')||[]).length; } catch(_) {}
+  if (wlCount === 0) { el.style.display = 'none'; return; }
+  const last = parseInt(localStorage.getItem('so_last_backup') || '0');
+  const daysSince = last ? (Date.now() - last) / 86400000 : 999;
+  if (daysSince >= 7) {
+    el.style.display = 'block';
+    el.textContent = last
+      ? (he ? ('⏰ הגיבוי האחרון לפני ' + Math.floor(daysSince) + ' ימים — מומלץ לגבות שוב') : ('⏰ Last backup ' + Math.floor(daysSince) + ' days ago — consider backing up again'))
+      : (he ? '⏰ עדיין לא גיבית את רשימת המעקב — מומלץ לגבות עכשיו' : '⏰ You haven\'t backed up your watchlist yet — consider doing it now');
+  } else {
+    el.style.display = 'none';
+  }
+}
+
 function toggleDrawer() {
   document.getElementById('drawer').classList.toggle('open');
   document.getElementById('drawerOverlay').classList.toggle('open');
@@ -1982,6 +2101,7 @@ function goTo(page) {
     renderWatchlist();
     refreshWatchlistPrices();
   }
+  if (page === 'apikeys' && typeof updateBackupReminder === 'function') updateBackupReminder();
 }
 
 // ── API ────────────────────────────────────────────────────────
@@ -3040,6 +3160,7 @@ function updateFinnhubBadge() {
   }
 }
 setTimeout(updateFinnhubBadge, 100);
+setTimeout(() => { try { updateBackupReminder(); } catch(_){} }, 250);
 
 async function fetchFinnhubPrice(ticker) {
   if (!finnhubKey) return null;
