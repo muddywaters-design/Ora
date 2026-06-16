@@ -103,6 +103,7 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
 .loading-sym{font-family:var(--mono);font-size:30px;font-weight:700;color:var(--green);letter-spacing:.08em;}
 .lbar{width:220px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;}
 .lfill{height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:1px;animation:la 2s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(0.92)}}
 @keyframes la{0%{width:0;margin-left:0}50%{width:60%;margin-left:20%}100%{width:0;margin-left:100%}}
 .lsteps{font-family:var(--mono);font-size:10px;color:var(--t3);text-align:center;line-height:2.2;letter-spacing:.03em;}
 .lstep-done{color:var(--green);}
@@ -567,6 +568,12 @@ body.lang-he .fc-tf {
         </div>
       </div>
       <div id="accDashboard"></div>
+      <div id="hitRateResult"></div>
+      <div id="hitRateWrap" style="margin-bottom:8px;display:none;">
+        <button id="hitRateBtn" onclick="computeWatchlistHitRate()" style="background:linear-gradient(90deg,var(--s2),var(--s1));border:1px solid var(--b2);color:var(--t1);padding:10px 14px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;width:100%;">
+          📊 <span id="hitRateBtnLabel">Stock Picking Scorecard — Up vs Down</span>
+        </button>
+      </div>
       <!-- Debug button - temporary -->
       <div id="wlDebug" style="margin-bottom:8px;">
         <button onclick="wlDebugCheck()" style="background:var(--s2);border:1px solid var(--b1);color:var(--t2);padding:8px 14px;border-radius:8px;font-family:var(--mono);font-size:10px;cursor:pointer;width:100%;">
@@ -5746,32 +5753,168 @@ function txtCard(title, text, acc) {
 
 // ── Watchlist ──────────────────────────────────────────────────
 // ── Run All Accuracy Check ────────────────────────────────────
+// === Watchlist Stock-Picking Scorecard (direction-only Hit Rate) ===
+// Different from forecast accuracy: this asks "of the stocks I chose to track,
+// how many simply went UP vs DOWN since I added them?" — a pure measure of whether
+// the user's stock-selection process produces winners over time. No AI, no forecasts.
+async function computeWatchlistHitRate() {
+  const btn = document.getElementById('hitRateBtn');
+  const out = document.getElementById('hitRateResult');
+  if (!out) return;
+  if (!watchlist || watchlist.length === 0) { out.innerHTML = ''; return; }
+
+  const he = (typeof langMode !== 'undefined' && langMode === 'he');
+  const FLAT_THRESHOLD = 2.0; // moves within ±2% count as "flat", not up/down
+
+  if (btn) { btn.disabled = true; btn.textContent = he ? '⏳ מחשב…' : '⏳ Computing…'; }
+  out.innerHTML = '<div style="padding:16px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--t3);">' +
+    '<div style="font-size:24px;margin-bottom:8px;animation:pulse 1.2s ease-in-out infinite;">📊</div>' +
+    (he ? 'מושך מחירים נוכחיים…' : 'Fetching current prices…') + '</div>';
+  await new Promise(r => setTimeout(r, 30));
+
+  try {
+    // Fetch current prices in parallel (cached layer keeps it fast)
+    const priceMap = {};
+    await Promise.allSettled(
+      watchlist.map(entry => fetchLivePrice(entry.ticker).then(live => { priceMap[entry.ticker] = live; }))
+    );
+
+    let up = 0, down = 0, flat = 0, noData = 0;
+    const rows = [];
+    for (const entry of watchlist) {
+      // Price when the stock was added to the watchlist
+      const startPrice = parseFloat((entry.data?.current_price||'').replace(/[^0-9.]/g,'')) || null;
+      const live = priceMap[entry.ticker];
+      const nowPrice = live ? parseFloat(live.price) : null;
+      if (!startPrice || !nowPrice) { noData++; continue; }
+
+      const changePct = ((nowPrice - startPrice) / startPrice) * 100;
+      // Days tracked (context — longer tracking = more chance to move)
+      let days = null;
+      if (entry.dateISO) { const d = new Date(entry.dateISO); if (!isNaN(d)) days = Math.round((Date.now() - d) / 86400000); }
+
+      let dir;
+      if (changePct > FLAT_THRESHOLD) { up++; dir = 'up'; }
+      else if (changePct < -FLAT_THRESHOLD) { down++; dir = 'down'; }
+      else { flat++; dir = 'flat'; }
+
+      rows.push({ ticker: entry.ticker, changePct, days, dir, startPrice, nowPrice });
+    }
+
+    const evaluated = up + down + flat;
+    renderWatchlistHitRate({ up, down, flat, noData, evaluated, total: watchlist.length, rows, flatThreshold: FLAT_THRESHOLD });
+  } catch(e) {
+    out.innerHTML = '<div style="padding:12px;color:var(--red);font-size:11px;">⚠️ ' + (he?'שגיאה בחישוב':'Computation error') + '</div>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = ''; const lbl = document.createElement('span'); btn.textContent = '📊 '; btn.appendChild(document.createTextNode(he ? 'תעודת ציונים — עלו מול ירדו' : 'Stock Picking Scorecard — Up vs Down')); }
+  }
+}
+
+function renderWatchlistHitRate(d) {
+  const out = document.getElementById('hitRateResult');
+  if (!out) return;
+  const he = (typeof langMode !== 'undefined' && langMode === 'he');
+
+  if (d.evaluated === 0) {
+    out.innerHTML = '<div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:16px;margin-bottom:8px;font-size:11px;color:var(--t3);text-align:center;">' +
+      (he ? 'אין מספיק נתונים (חסר מחיר התחלה או מחיר נוכחי)' : 'Not enough data (missing start or current price)') + '</div>';
+    return;
+  }
+
+  // "Hit rate" = % of tracked stocks that went up (the core question)
+  const hitRate = Math.round((d.up / d.evaluated) * 100);
+  const upDownRatio = d.down > 0 ? (d.up / d.down) : (d.up > 0 ? Infinity : 0);
+  const hrColor = hitRate >= 60 ? 'var(--green)' : hitRate >= 45 ? 'var(--yellow)' : 'var(--red)';
+  const verdict = hitRate >= 60 ? (he?'בחירת מניות חזקה':'Strong stock selection')
+               : hitRate >= 45 ? (he?'בחירה סבירה':'Decent selection')
+               : (he?'הבחירות מתקשות':'Selections underperforming');
+
+  // Sort rows: biggest winners first
+  const sorted = [...d.rows].sort((a,b) => b.changePct - a.changePct);
+  const rowHtml = sorted.map(r => {
+    const icon = r.dir === 'up' ? '⬆️' : r.dir === 'down' ? '⬇️' : '➡️';
+    const col = r.dir === 'up' ? 'var(--green)' : r.dir === 'down' ? 'var(--red)' : 'var(--t3)';
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--b1);">' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+        '<span style="font-size:13px;">' + icon + '</span>' +
+        '<span onclick="goAnalyze(\'' + r.ticker + '\')" style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--blue);cursor:pointer;">' + escapeHTML(r.ticker) + '</span>' +
+        (r.days != null ? '<span style="font-size:9px;color:var(--t3);">' + r.days + (he?' ימים':'d') + '</span>' : '') +
+      '</div>' +
+      '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + col + ';">' + (r.changePct>=0?'+':'') + r.changePct.toFixed(1) + '%</span>' +
+    '</div>';
+  }).join('');
+
+  out.innerHTML =
+    '<div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:16px;margin-bottom:8px;">' +
+      '<div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px;">📊 ' + (he?'תעודת ציונים — בחירת מניות':'Stock-Picking Scorecard') + '</div>' +
+      '<div style="font-size:9px;color:var(--t3);margin-bottom:12px;">' + (he?'כיוון בלבד מאז ההוספה — לא דיוק תחזית':'Direction-only since you added them — not forecast accuracy') + '</div>' +
+
+      // Big hit rate number
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--bg);border-radius:10px;margin-bottom:12px;">' +
+        '<div>' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">' + (he?'שיעור הצלחה':'Hit Rate') + '</div>' +
+          '<div style="font-size:10px;color:' + hrColor + ';margin-top:2px;">' + verdict + '</div>' +
+        '</div>' +
+        '<div style="font-family:var(--mono);font-size:30px;font-weight:700;color:' + hrColor + ';">' + hitRate + '%</div>' +
+      '</div>' +
+
+      // Up / Down / Flat tally
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;">' +
+        '<div style="text-align:center;padding:10px;background:var(--bg);border-radius:8px;border-top:2px solid var(--green);">' +
+          '<div style="font-family:var(--mono);font-size:22px;font-weight:700;color:var(--green);">' + d.up + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);">⬆️ ' + (he?'עלו':'Up') + '</div>' +
+        '</div>' +
+        '<div style="text-align:center;padding:10px;background:var(--bg);border-radius:8px;border-top:2px solid var(--red);">' +
+          '<div style="font-family:var(--mono);font-size:22px;font-weight:700;color:var(--red);">' + d.down + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);">⬇️ ' + (he?'ירדו':'Down') + '</div>' +
+        '</div>' +
+        '<div style="text-align:center;padding:10px;background:var(--bg);border-radius:8px;border-top:2px solid var(--t3);">' +
+          '<div style="font-family:var(--mono);font-size:22px;font-weight:700;color:var(--t3);">' + d.flat + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);">➡️ ' + (he?'יציבות':'Flat') + '</div>' +
+        '</div>' +
+      '</div>' +
+
+      // Per-stock breakdown
+      '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">' + (he?'פירוט':'Breakdown') + '</div>' +
+      rowHtml +
+
+      // Honest footnote
+      '<div style="font-size:8px;color:var(--t3);margin-top:10px;font-style:italic;">' +
+        (he ? ('יציב = תנועה בטווח ±' + d.flatThreshold + '%. ' + (d.noData>0?(d.noData + ' מניות ללא נתון. '):'') + 'שים לב: מניות במעקב ארוך יותר קיבלו יותר זמן לזוז.')
+            : ('Flat = move within ±' + d.flatThreshold + '%. ' + (d.noData>0?(d.noData + ' stocks lacked data. '):'') + 'Note: longer-tracked stocks had more time to move.')) +
+      '</div>' +
+    '</div>';
+}
+
 async function runAllAccuracy() {
   if (watchlist.length === 0) return;
-  // Current SPY — enables benchmark-excess on records that stored spy_at_forecast
-  let spyNowPrice = null;
-  try { const _s = await fetchLivePrice('SPY'); spyNowPrice = parseFloat(_s?.price) || null; } catch(_) {}
   const btn = document.getElementById('runAllBtn');
   const dashboard = document.getElementById('accDashboard');
   if (!btn || !dashboard) return;
 
+  const he = (typeof langMode !== 'undefined' && langMode === 'he');
   btn.disabled = true;
-  btn.textContent = '⏳ Checking…';
+  btn.textContent = he ? '⏳ בודק…' : '⏳ Checking…';
 
-  // Show loading state
+  // Show loading state IMMEDIATELY (before any await) so the user gets instant feedback
   dashboard.innerHTML = `
     <div class="acc-dashboard">
       <div class="acc-dash-head">
-        <span style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">⚡ Accuracy Dashboard</span>
-        <span style="font-size:10px;color:var(--t3);">Fetching live prices for ${watchlist.length} stocks…</span>
+        <span style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);">⚡ ${he?'לוח דיוק':'Accuracy Dashboard'}</span>
+        <span style="font-size:10px;color:var(--t3);">${he?('מנתח '+watchlist.length+' מניות…'):('Analyzing '+watchlist.length+' stocks…')}</span>
       </div>
-      <div style="padding:20px;text-align:center;">
-        <div style="width:200px;height:2px;background:var(--b2);border-radius:1px;overflow:hidden;margin:0 auto 12px;">
-          <div style="height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:1px;animation:la 1.5s ease-in-out infinite;"></div>
+      <div style="padding:28px 20px;text-align:center;">
+        <div style="font-size:32px;margin-bottom:14px;animation:pulse 1.2s ease-in-out infinite;">📊</div>
+        <div style="width:240px;height:4px;background:var(--b2);border-radius:2px;overflow:hidden;margin:0 auto 14px;">
+          <div style="height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:2px;animation:la 1.5s ease-in-out infinite;"></div>
         </div>
-        <div id="allAccStatus" style="font-family:var(--mono);font-size:10px;color:var(--t3);">Starting…</div>
+        <div id="allAccStatus" style="font-family:var(--mono);font-size:11px;color:var(--t2);font-weight:600;">${he?'מתחיל…':'Starting…'}</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--t3);margin-top:6px;">${he?'מושך מחירים חיים — כ-5-15 שניות':'Fetching live prices — about 5-15 seconds'}</div>
       </div>
     </div>`;
+
+  // Yield to the browser so the loading UI paints before the first network await
+  await new Promise(r => setTimeout(r, 30));
 
   const results = [];
   const setStatus = (msg) => {
@@ -5779,8 +5922,13 @@ async function runAllAccuracy() {
     if (el) el.textContent = msg;
   };
 
+  // Current SPY — enables benchmark-excess on records that stored spy_at_forecast
+  setStatus(he ? 'מושך נתוני SPY…' : 'Fetching SPY benchmark…');
+  let spyNowPrice = null;
+  try { const _s = await fetchLivePrice('SPY'); spyNowPrice = parseFloat(_s?.price) || null; } catch(_) {}
+
   // Fetch all prices in parallel (much faster)
-  setStatus(`Fetching all ${watchlist.length} prices in parallel…`);
+  setStatus(he ? ('מושך ' + watchlist.length + ' מחירים במקביל…') : ('Fetching all ' + watchlist.length + ' prices in parallel…'));
   const priceMap = {};
   await Promise.allSettled(
     watchlist.map(entry => fetchLivePrice(entry.ticker).then(live => { priceMap[entry.ticker] = live; }))
@@ -6453,6 +6601,10 @@ function renderWatchlist() {
   document.getElementById('wlSubtitle').textContent = watchlist.length + ' stock' + (watchlist.length !== 1 ? 's' : '') + ' tracked';
   const runAllBtn = document.getElementById('runAllBtn');
   if (runAllBtn) runAllBtn.style.display = watchlist.length > 0 ? 'block' : 'none';
+  const hitRateWrap = document.getElementById('hitRateWrap');
+  if (hitRateWrap) hitRateWrap.style.display = watchlist.length > 0 ? 'block' : 'none';
+  const hrLbl = document.getElementById('hitRateBtnLabel');
+  if (hrLbl) hrLbl.textContent = (typeof langMode !== 'undefined' && langMode === 'he') ? 'תעודת ציונים — עלו מול ירדו' : 'Stock Picking Scorecard — Up vs Down';
 
   // Show/hide sort bar
   const sortBar = document.getElementById('wlSortBar');
