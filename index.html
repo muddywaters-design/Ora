@@ -375,16 +375,48 @@ body.lang-he .fc-tf {
       <span class="nav-icon">💼</span>
       <span>Portfolio</span>
     </div>
+    <div class="nav-item" id="nav-apikeys" onclick="goTo('apikeys')">
+      <span class="nav-icon">🔑</span>
+      <span id="nav-apikeys-label">API Keys</span>
+    </div>
   </div>
 </div>
 
-<!-- API KEY BAR -->
-<div class="apikey-bar" id="apikeyBar">
-  <span class="apikey-label">API Key</span>
-  <input class="apikey-input" id="apikeyInput" type="password" placeholder="sk-ant-api03-…  (saved locally in your browser)" maxlength="120">
-  <button class="apikey-save" onclick="saveApiKey()">Save</button>
-  <button class="apikey-clear" onclick="clearApiKey()" title="Clear saved key">✕</button>
-  <span class="apikey-status" id="apikeyStatus"></span>
+<!-- PAGE: API KEYS (moved off the homepage into its own page) -->
+<div class="page" id="page-apikeys">
+  <div class="content">
+    <div style="max-width:560px;margin:0 auto;padding-top:8px;">
+      <h2 id="apikeysTitle" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--t1);margin-bottom:4px;">🔑 API Keys</h2>
+      <p id="apikeysIntro" style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:18px;">Your keys are stored only in this browser (localStorage) and never sent anywhere except the provider's own API. Leave a field blank to skip that provider.</p>
+
+      <!-- Anthropic (primary) -->
+      <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:16px;margin-bottom:14px;">
+        <label style="display:block;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:3px;">Anthropic (Claude) <span style="color:var(--green);font-size:9px;">— required for analysis</span></label>
+        <p style="font-size:10px;color:var(--t3);margin-bottom:8px;">Powers the AI analysis. Get one at console.anthropic.com</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input id="apikeyInput" type="password" placeholder="sk-ant-api03-…" maxlength="120" style="flex:1;min-width:180px;background:var(--bg);border:1px solid var(--b2);border-radius:8px;padding:10px 12px;font-family:var(--mono);font-size:12px;color:var(--t1);">
+          <button onclick="saveApiKey()" style="background:var(--green);border:none;color:#fff;padding:10px 18px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">Save</button>
+          <button onclick="clearApiKey()" title="Clear saved key" style="background:var(--s2);border:1px solid var(--b2);color:var(--t2);padding:10px 14px;border-radius:8px;font-family:var(--mono);font-size:11px;cursor:pointer;">✕</button>
+        </div>
+        <div id="apikeyStatus" style="font-family:var(--mono);font-size:10px;margin-top:8px;"></div>
+      </div>
+
+      <!-- Optional data-provider keys -->
+      <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:16px;margin-bottom:14px;">
+        <label style="display:block;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:3px;">Finnhub <span style="color:var(--t3);font-size:9px;">— optional</span></label>
+        <p style="font-size:10px;color:var(--t3);margin-bottom:8px;">Reliable price fallback + real news, analyst & insider data. 60 req/min free.</p>
+        <button onclick="showFinnhubSetup()" style="background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">📈 Configure Finnhub</button>
+      </div>
+      <div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:16px;margin-bottom:14px;">
+        <label style="display:block;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:3px;">Twelve Data <span style="color:var(--t3);font-size:9px;">— optional</span></label>
+        <p style="font-size:10px;color:var(--t3);margin-bottom:8px;">Real RSI / MACD technical indicators. Free tier available.</p>
+        <button onclick="showTwelveSetup()" style="background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;">📊 Configure Twelve Data</button>
+      </div>
+      <div id="apikeysExtraMount"></div>
+
+      <p style="font-size:10px;color:var(--t3);line-height:1.6;margin-top:10px;font-style:italic;">Finnhub and Twelve Data are optional — they add news sentiment and extra price data. The app works without them using free sources.</p>
+    </div>
+  </div>
 </div>
 
 <!-- PAGE: ANALYZE -->
@@ -1786,6 +1818,9 @@ function translateLegend() {
 
   // Topbar
   set('lg-theme','Theme','ערכת נושא'); set('lg-theme-d','Switch between light and dark mode','מעבר בין מצב בהיר לכהה');
+  set('apikeysTitle','🔑 API Keys','🔑 מפתחות API');
+  set('apikeysIntro',"Your keys are stored only in this browser (localStorage) and never sent anywhere except the provider's own API. Leave a field blank to skip that provider.",'המפתחות נשמרים רק בדפדפן הזה (localStorage) ולא נשלחים לשום מקום מלבד ה-API של הספק עצמו. השאר שדה ריק כדי לדלג על ספק.');
+  set('nav-apikeys-label','API Keys','מפתחות API');
   set('lg-web','Web Search','חיפוש ברשת'); set('lg-web-d','Let the model search live news (more accurate, uses more tokens)','מאפשר למודל לחפש חדשות בזמן אמת (מדויק יותר, צורך יותר טוקנים)');
   set('lg-finn','Finnhub','Finnhub'); set('lg-finn-d','Reliable prices + real news, analysts, insider & financials','מחירים אמינים + חדשות, אנליסטים, מנהלים ודוחות אמיתיים');
   set('lg-twelve','Twelve Data','Twelve Data'); set('lg-twelve-d','Real RSI & MACD indicators (works when Yahoo is blocked)','אינדיקטורים אמיתיים RSI ו-MACD (עובד כש-Yahoo חסום)');
