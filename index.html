@@ -5764,7 +5764,8 @@ async function computeWatchlistHitRate() {
   if (!watchlist || watchlist.length === 0) { out.innerHTML = ''; return; }
 
   const he = (typeof langMode !== 'undefined' && langMode === 'he');
-  const FLAT_THRESHOLD = 2.0; // moves within ±2% count as "flat", not up/down
+  const FLAT_THRESHOLD = 2.0;     // moves within ±2% count as "flat", not up/down
+  const ANOMALY_THRESHOLD = 100;  // |move| > 100% is almost always a stock split, not a real gain
 
   if (btn) { btn.disabled = true; btn.textContent = he ? '⏳ מחשב…' : '⏳ Computing…'; }
   out.innerHTML = '<div style="padding:16px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--t3);">' +
@@ -5781,6 +5782,7 @@ async function computeWatchlistHitRate() {
 
     let up = 0, down = 0, flat = 0, noData = 0;
     const rows = [];
+    const anomalies = []; // suspected splits — shown separately, NOT counted in the score
     for (const entry of watchlist) {
       // Price when the stock was added to the watchlist
       const startPrice = parseFloat((entry.data?.current_price||'').replace(/[^0-9.]/g,'')) || null;
@@ -5793,6 +5795,14 @@ async function computeWatchlistHitRate() {
       let days = null;
       if (entry.dateISO) { const d = new Date(entry.dateISO); if (!isNaN(d)) days = Math.round((Date.now() - d) / 86400000); }
 
+      // Anomaly guard: a >100% swing in either direction is almost certainly a
+      // stock split or reverse-split (the price changes but the value doesn't).
+      // We set these aside so one false "+763%" can't inflate the scorecard.
+      if (Math.abs(changePct) > ANOMALY_THRESHOLD) {
+        anomalies.push({ ticker: entry.ticker, changePct, days, startPrice, nowPrice });
+        continue;
+      }
+
       let dir;
       if (changePct > FLAT_THRESHOLD) { up++; dir = 'up'; }
       else if (changePct < -FLAT_THRESHOLD) { down++; dir = 'down'; }
@@ -5802,7 +5812,7 @@ async function computeWatchlistHitRate() {
     }
 
     const evaluated = up + down + flat;
-    renderWatchlistHitRate({ up, down, flat, noData, evaluated, total: watchlist.length, rows, flatThreshold: FLAT_THRESHOLD });
+    renderWatchlistHitRate({ up, down, flat, noData, evaluated, total: watchlist.length, rows, anomalies, flatThreshold: FLAT_THRESHOLD });
   } catch(e) {
     out.innerHTML = '<div style="padding:12px;color:var(--red);font-size:11px;">⚠️ ' + (he?'שגיאה בחישוב':'Computation error') + '</div>';
   } finally {
@@ -5847,13 +5857,19 @@ function renderWatchlistHitRate(d) {
   out.innerHTML =
     '<div style="background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:16px;margin-bottom:8px;">' +
       '<div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);margin-bottom:4px;">📊 ' + (he?'תעודת ציונים — בחירת מניות':'Stock-Picking Scorecard') + '</div>' +
-      '<div style="font-size:9px;color:var(--t3);margin-bottom:12px;">' + (he?'כיוון בלבד מאז ההוספה — לא דיוק תחזית':'Direction-only since you added them — not forecast accuracy') + '</div>' +
+      '<div style="font-size:9px;color:var(--t3);margin-bottom:10px;">' + (he?'כיוון בלבד מאז ההוספה — לא דיוק תחזית':'Direction-only since you added them — not forecast accuracy') + '</div>' +
+      // Plain-language explanation — readable even if you know nothing about investing
+      '<div style="background:var(--bg);border-radius:8px;padding:9px 11px;margin-bottom:12px;font-size:10px;color:var(--t2);line-height:1.5;">' +
+        (he ? '💡 <b>מה זה אומר:</b> מתוך המניות שבחרת לעקוב אחריהן, כמה עלו במחיר מאז שהוספת אותן? זה בודק אם הבחירות שלך מצליחות — לא אם התחזיות היו מדויקות.'
+            : '💡 <b>What this means:</b> Of the stocks you chose to track, how many went up in price since you added them? This checks whether your picks tend to win — not whether the forecasts were accurate.') +
+      '</div>' +
 
       // Big hit rate number
       '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--bg);border-radius:10px;margin-bottom:12px;">' +
         '<div>' +
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;">' + (he?'שיעור הצלחה':'Hit Rate') + '</div>' +
-          '<div style="font-size:10px;color:' + hrColor + ';margin-top:2px;">' + verdict + '</div>' +
+          '<div style="font-size:11px;color:' + hrColor + ';margin-top:2px;font-weight:700;">' + verdict + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);margin-top:3px;">' + (he?(d.up + ' מתוך ' + d.evaluated + ' מניות עלו'):(d.up + ' of ' + d.evaluated + ' stocks went up')) + '</div>' +
         '</div>' +
         '<div style="font-family:var(--mono);font-size:30px;font-weight:700;color:' + hrColor + ';">' + hitRate + '%</div>' +
       '</div>' +
@@ -5878,10 +5894,34 @@ function renderWatchlistHitRate(d) {
       '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">' + (he?'פירוט':'Breakdown') + '</div>' +
       rowHtml +
 
-      // Honest footnote
-      '<div style="font-size:8px;color:var(--t3);margin-top:10px;font-style:italic;">' +
-        (he ? ('יציב = תנועה בטווח ±' + d.flatThreshold + '%. ' + (d.noData>0?(d.noData + ' מניות ללא נתון. '):'') + 'שים לב: מניות במעקב ארוך יותר קיבלו יותר זמן לזוז.')
-            : ('Flat = move within ±' + d.flatThreshold + '%. ' + (d.noData>0?(d.noData + ' stocks lacked data. '):'') + 'Note: longer-tracked stocks had more time to move.')) +
+      // Suspected stock splits — set aside so they don't distort the score
+      ((d.anomalies && d.anomalies.length) ? (
+        '<div style="margin-top:14px;padding:11px;background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);border-radius:8px;">' +
+          '<div style="font-size:10px;color:var(--yellow);font-weight:700;margin-bottom:5px;">⚠️ ' + (he?'לא נכלל בציון — חשד לפיצול מניה':'Excluded from score — likely stock split') + '</div>' +
+          '<div style="font-size:9px;color:var(--t3);margin-bottom:8px;line-height:1.5;">' +
+            (he ? 'כשחברה מפצלת או מאחדת מניות, המחיר "קופץ" טכנית בלי שהשווי באמת השתנה. הוצאנו אותן כדי שלא יעוותו את התוצאה.'
+                : 'When a company splits or reverse-splits its shares, the price "jumps" technically without the value really changing. We set these aside so they don\'t skew your result.') +
+          '</div>' +
+          d.anomalies.map(function(a) {
+            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;">' +
+              '<div style="display:flex;align-items:center;gap:8px;">' +
+                '<span style="font-size:12px;">⚠️</span>' +
+                '<span onclick="goAnalyze(\'' + a.ticker + '\')" style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--blue);cursor:pointer;">' + escapeHTML(a.ticker) + '</span>' +
+                (a.days != null ? '<span style="font-size:9px;color:var(--t3);">' + a.days + (he?' ימים':'d') + '</span>' : '') +
+              '</div>' +
+              '<span style="font-family:var(--mono);font-size:11px;color:var(--t3);">' + (a.changePct>=0?'+':'') + a.changePct.toFixed(0) + '%</span>' +
+            '</div>';
+          }).join('') +
+        '</div>'
+      ) : '') +
+
+      // Plain-language footnote
+      '<div style="font-size:9px;color:var(--t3);margin-top:12px;line-height:1.6;border-top:1px solid var(--b1);padding-top:10px;">' +
+        '<div style="margin-bottom:3px;">⬆️ ' + (he?'עלה = המחיר עלה ביותר מ-2%':'Up = price rose more than 2%') + '</div>' +
+        '<div style="margin-bottom:3px;">⬇️ ' + (he?'ירד = המחיר ירד ביותר מ-2%':'Down = price fell more than 2%') + '</div>' +
+        '<div style="margin-bottom:3px;">➡️ ' + (he?'יציב = נשאר בטווח של ±2% (כמעט ללא שינוי)':'Flat = stayed within ±2% (barely moved)') + '</div>' +
+        (d.noData>0 ? ('<div style="margin-bottom:3px;">❓ ' + (he?(d.noData + ' מניות ללא מספיק נתונים'):(d.noData + ' stocks lacked data')) + '</div>') : '') +
+        '<div style="margin-top:6px;font-style:italic;color:var(--t3);">' + (he?'שים לב: מניות במעקב ארוך יותר קיבלו יותר זמן לזוז — לכן מספר הימים מוצג ליד כל אחת.':'Note: stocks tracked longer had more time to move — that\'s why the day count is shown next to each.') + '</div>' +
       '</div>' +
     '</div>';
 }
