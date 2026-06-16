@@ -2525,6 +2525,22 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
     if (riskOff) m += ' MACRO-DIRECTIVE: broad market deteriorating — do NOT issue new bullish entry signals unless the stock shows exceptional relative strength and overwhelming evidence; prefer NEUTRAL.';
     return m;
   })();
+  // Technical indicators (OBV/MFI/ADX/vol-cluster) — computed here so the AI can use them
+  const _ind = {
+    obv: calcOBV(liveData?._closes, liveData?._volumes),
+    mfi: calcMFI(liveData?._highs, liveData?._lows, liveData?._closes, liveData?._volumes, 14),
+    adx: calcADX(liveData?._highs, liveData?._lows, liveData?._closes, 14),
+    volCluster: calcVolatilityCluster(liveData?._closes),
+  };
+  const indicatorCtx = (() => {
+    const parts = [];
+    if (_ind.adx) parts.push('ADX:' + _ind.adx.adx + '(' + _ind.adx.strength + ' ' + _ind.adx.direction + '-trend)');
+    if (_ind.mfi) parts.push('MFI:' + _ind.mfi.mfi + '(' + _ind.mfi.zone + ')');
+    if (_ind.obv) parts.push('OBV:' + _ind.obv.trend);
+    if (_ind.volCluster) parts.push('VolRegime:' + _ind.volCluster.state + '(' + _ind.volCluster.ratio + 'x)');
+    return parts.length ? 'INDICATORS(computed): ' + parts.join(', ') + '. ADX>25=strong trend; MFI>80 overbought/<20 oversold; OBV accumulation=buying pressure; VolRegime turbulent=widen risk. Weight these but do NOT recompute.' : '';
+  })();
+
   // Factor scores — computed deterministically; the AI interprets them, never invents them
   const _fs = calculateFactorScores(fhData, liveData?._closes, macroData ? { regime: (liveData?._spyRegimeRef || macroData?.regime) } : null);
   const factorCtx = _fs ? (() => {
@@ -2723,7 +2739,7 @@ function mkSinglePrompt(ticker, liveData, fgData, insiderData, trendsData, short
   })();
   const multiTfNote = 'Multi-TF: week=daily,month=weekly. Lower confidence if conflict.';
   const langNote = (typeof langMode !== 'undefined' && langMode === 'he') ? 'WRITE ALL TEXT FIELDS (reasoning, bull_case, bear_case, primary_driver, key_catalysts, risks, key_level, fundamental_outlook.summary, full_analysis) IN HEBREW. Numbers, tickers, and verdict codes stay in English.' : '';
-  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx} ${macroCtx} ${factorCtx} ${performanceCtx} ${pennyCtx} ${dataQualityCtx}
+  return `${d}. ${multiTfNote} ${langNote} Analyze ${ticker}. ${price} ${techs} ${volCtx} ${earnCtx} ${posCtx} ${secCtx} ${revCtx} ${betaCtx} ${divCtx} ${insiderCtx} ${trendsCtx} ${breakoutCtx} ${shortCtx} ${optFlowCtx} ${earningsCtx} ${sectorRotCtx} ${regimeCtx} ${maCtx} ${momentumCtx} ${atrDivergenceCtx} ${macroCtx} ${indicatorCtx} ${factorCtx} ${performanceCtx} ${pennyCtx} ${dataQualityCtx}
 Reply with ONLY JSON (no markdown):
 {"company_name":"X","current_price":"$${liveData?.price||'X'}","overall_signal":"BULLISH","sources_used":["Yahoo Finance","Bloomberg","CNBC","MarketWatch","Seeking Alpha","Benzinga","Finviz","TradingView","Motley Fool","Investing.com","Reuters","The Street"],"primary_driver":"The single most important factor driving this forecast","stop_loss":"$X — level that invalidates the bullish thesis","signals":{"rsi":{"value":"X","label":"X"},"macd":{"value":"X","label":"X"},"analyst_consensus":{"value":"X","label":"X"},"price_target":{"value":"X","label":"X"},"pe_ratio":{"value":"X","label":"X"},"short_interest":{"value":"X","label":"X"}},"forecasts":{"week":{"direction":"+X%","range":"$X-$X","confidence":70,"signal":"BULLISH","reasoning":"X"},"month":{"direction":"+X%","range":"$X-$X","confidence":62,"signal":"BULLISH","reasoning":"X"},"half_year":{"direction":"+X%","range":"$X-$X","confidence":52,"signal":"BULLISH","reasoning":"X"},"year":{"direction":"+X%","range":"$X-$X","confidence":44,"signal":"BULLISH","reasoning":"X"}},"key_risks":"2 sentences.","key_catalysts":"2 sentences.","fundamental_outlook":{"summary":"2-3 sentences on financial health","health_score":"1-10","bull_target_pct":"+X%","bear_target_pct":"-X%","base_case_pct":"+/-X%","verdict":"STRONG|HEALTHY|MIXED|WEAK|RISKY"},"full_analysis":"3 sentences."}`;
 }
@@ -3784,6 +3800,7 @@ async function fetchYahooData(ticker) {
         _closes: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null) || [],
         _highs: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.high?.filter(x=>x!=null) || [],
         _lows: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.low?.filter(x=>x!=null) || [],
+        _volumes: historicalData?.chart?.result?.[0]?.indicators?.quote?.[0]?.volume?.filter(x=>x!=null) || [],
         // Rolling 20-day VWAP — computed on RAW aligned arrays (close+volume same index)
         // to avoid misalignment from independent null-filtering. Honest label: this is a
         // 20-day rolling VWAP from daily bars, not intraday session VWAP.
@@ -4271,6 +4288,11 @@ function runMonteCarlo(closes, price, horizonDays, numPaths) {
     return arr[idx];
   };
   const probGreen = finals.filter(v => v > price).length / N;
+  // 3-way directional probabilities with a ±2% flat band (exact path counts)
+  const upHi = price * 1.02, dnLo = price * 0.98;
+  const probUp = finals.filter(v => v > upHi).length / N;
+  const probDown = finals.filter(v => v < dnLo).length / N;
+  const probFlat = 1 - probUp - probDown;
   // Probability of touching -10% at any point during the horizon (path-dependent)
   const touch10 = minDraws.filter(v => v <= price * 0.90).length / N;
   const mean = finals.reduce((a, b) => a + b, 0) / N;
@@ -4283,6 +4305,7 @@ function runMonteCarlo(closes, price, horizonDays, numPaths) {
     p75: pct(finals, 0.75),  p95: pct(finals, 0.95),
     mean,
     probGreen,
+    probUp, probFlat, probDown,
     touchMinus10: touch10,
     // convenience % moves
     p5Pct: toPct(pct(finals,0.05)), p50Pct: toPct(pct(finals,0.50)), p95Pct: toPct(pct(finals,0.95)),
@@ -4538,6 +4561,113 @@ function calcATR(highs, lows, closes, period=14) {
   const slice = trs.slice(-period);
   const atr = slice.reduce((a,b)=>a+b,0) / slice.length;
   return { atr, approx: !hasHL };
+}
+
+// === Technical Indicators Toolkit (OBV, MFI, ADX, Volatility Clustering) ===
+// All computed from OHLCV we already fetch. Each returns null when data is insufficient.
+// These are standard, well-documented indicators — no curve-fitting, no look-ahead.
+
+// On-Balance Volume — cumulative volume that adds on up-days, subtracts on down-days.
+// Rising OBV while price is flat/up = accumulation; falling OBV = distribution.
+// We report the slope of OBV over the window (normalized), not the raw cumulative value.
+function calcOBV(closes, volumes) {
+  if (!Array.isArray(closes) || !Array.isArray(volumes)) return null;
+  const n = Math.min(closes.length, volumes.length);
+  if (n < 15) return null;
+  const c = closes.slice(-n), v = volumes.slice(-n);
+  let obv = 0; const series = [0];
+  for (let i = 1; i < n; i++) {
+    if (c[i] > c[i-1]) obv += v[i];
+    else if (c[i] < c[i-1]) obv -= v[i];
+    series.push(obv);
+  }
+  // Normalize the recent OBV trend: slope of last ~20 points / average daily volume
+  const w = series.slice(-20);
+  const avgVol = v.slice(-20).reduce((a,b)=>a+b,0) / Math.min(20, v.length) || 1;
+  const slope = (w[w.length-1] - w[0]) / Math.max(1, w.length - 1);
+  const normSlope = slope / avgVol; // ~ +1 means OBV rising by ~1 day's volume per day
+  return {
+    trend: normSlope > 0.15 ? 'accumulation' : normSlope < -0.15 ? 'distribution' : 'neutral',
+    normSlope: Math.round(normSlope * 100) / 100,
+  };
+}
+
+// Money Flow Index — a volume-weighted RSI (0-100). >80 overbought, <20 oversold.
+// Uses typical price (H+L+C)/3 × volume to measure buying vs selling pressure.
+function calcMFI(highs, lows, closes, volumes, period = 14) {
+  const n = Math.min(highs?.length||0, lows?.length||0, closes.length, volumes?.length||0);
+  if (n < period + 2) return null;
+  const h = highs.slice(-n), l = lows.slice(-n), c = closes.slice(-n), v = volumes.slice(-n);
+  let posFlow = 0, negFlow = 0;
+  // Sum positive/negative money flow over the last `period` days
+  for (let i = n - period; i < n; i++) {
+    if (i < 1) continue;
+    const tp = (h[i] + l[i] + c[i]) / 3;
+    const tpPrev = (h[i-1] + l[i-1] + c[i-1]) / 3;
+    const mf = tp * v[i];
+    if (tp > tpPrev) posFlow += mf;
+    else if (tp < tpPrev) negFlow += mf;
+  }
+  if (posFlow + negFlow === 0) return null;
+  const mfi = 100 - (100 / (1 + posFlow / (negFlow || 1)));
+  return {
+    mfi: Math.round(mfi),
+    zone: mfi >= 80 ? 'overbought' : mfi <= 20 ? 'oversold' : 'neutral',
+  };
+}
+
+// Average Directional Index — trend STRENGTH (not direction), 0-100.
+// >25 = strong trend, <20 = weak/choppy. Also returns +DI/-DI for direction.
+function calcADX(highs, lows, closes, period = 14) {
+  const n = Math.min(highs?.length||0, lows?.length||0, closes.length);
+  if (n < period * 2 + 2) return null;
+  const h = highs.slice(-n), l = lows.slice(-n), c = closes.slice(-n);
+  const trArr = [], plusDM = [], minusDM = [];
+  for (let i = 1; i < n; i++) {
+    const tr = Math.max(h[i]-l[i], Math.abs(h[i]-c[i-1]), Math.abs(l[i]-c[i-1]));
+    trArr.push(tr);
+    const up = h[i] - h[i-1], down = l[i-1] - l[i];
+    plusDM.push((up > down && up > 0) ? up : 0);
+    minusDM.push((down > up && down > 0) ? down : 0);
+  }
+  // Wilder smoothing via simple average of the most recent `period`
+  const smooth = (arr) => { const s = arr.slice(-period); return s.reduce((a,b)=>a+b,0) / s.length; };
+  const atr = smooth(trArr);
+  if (atr === 0) return null;
+  const pDI = 100 * smooth(plusDM) / atr;
+  const mDI = 100 * smooth(minusDM) / atr;
+  const dx = (pDI + mDI === 0) ? 0 : 100 * Math.abs(pDI - mDI) / (pDI + mDI);
+  return {
+    adx: Math.round(dx),
+    plusDI: Math.round(pDI),
+    minusDI: Math.round(mDI),
+    strength: dx >= 25 ? 'strong' : dx >= 20 ? 'moderate' : 'weak',
+    direction: pDI > mDI ? 'up' : 'down',
+  };
+}
+
+// Volatility Clustering — are we currently in a high-vol or low-vol regime?
+// Compares recent (5-day) realized vol to the longer (30-day) baseline. Ratio >1.5
+// means volatility is clustering high (turbulent); <0.7 means unusually calm.
+// Grounded in the GARCH stylized fact that volatility is autocorrelated.
+function calcVolatilityCluster(closes) {
+  if (!Array.isArray(closes) || closes.length < 35) return null;
+  const rets = toLogReturns(closes.slice(-31));
+  if (rets.length < 25) return null;
+  const stdev = (arr) => {
+    if (arr.length < 2) return 0;
+    const m = arr.reduce((a,b)=>a+b,0) / arr.length;
+    return Math.sqrt(arr.reduce((a,b)=>a+(b-m)**2,0) / arr.length);
+  };
+  const recent = stdev(rets.slice(-5));
+  const baseline = stdev(rets);
+  if (baseline === 0) return null;
+  const ratio = recent / baseline;
+  return {
+    ratio: Math.round(ratio * 100) / 100,
+    state: ratio > 1.5 ? 'turbulent' : ratio < 0.7 ? 'calm' : 'normal',
+    recentVolPct: Math.round(recent * Math.sqrt(252) * 1000) / 10, // annualized %
+  };
 }
 
 // === RSI series + divergence detection ===
@@ -4946,6 +5076,24 @@ async function runAnalysis(sym) {
       parsed._probCone = calcProbabilityCone(cl, pr2);
       // Monte Carlo: 1,000 driftless bootstrap paths → full outcome distribution (1-month horizon)
       try { parsed._monteCarlo = runMonteCarlo(cl, pr2, 21, 1000); } catch(_) { parsed._monteCarlo = null; }
+      // Technical indicators toolkit (OBV / MFI / ADX / volatility clustering)
+      try {
+        parsed._indicators = {
+          obv: calcOBV(cl, liveData?._volumes),
+          mfi: calcMFI(liveData?._highs, liveData?._lows, cl, liveData?._volumes, 14),
+          adx: calcADX(liveData?._highs, liveData?._lows, cl, 14),
+          volCluster: calcVolatilityCluster(cl),
+        };
+      } catch(_) { parsed._indicators = null; }
+      // 3-way probability (Up / Flat / Down) — exact counts from the Monte Carlo paths
+      // (±2% flat band, matching the watchlist hit-rate convention).
+      if (parsed._monteCarlo && parsed._monteCarlo.probUp != null) {
+        parsed._probDist = {
+          up: parsed._monteCarlo.probUp,
+          flat: parsed._monteCarlo.probFlat,
+          down: parsed._monteCarlo.probDown,
+        };
+      }
       // Concentration risk vs current watchlist holdings (Pearson r > 0.75)
       parsed._concentrationRisk = findConcentrationRisk(t, cl);
     } catch(_) {}
@@ -5922,6 +6070,68 @@ function renderAnalysis(ticker, d) {
         '</div></div>';
     })()}
 
+    ${(() => {
+      // 3-way probability distribution (Up / Flat / Down) from the Monte Carlo paths
+      const pd = d._probDist;
+      if (!pd) return '';
+      const he = langMode === 'he';
+      const up = Math.round(pd.up * 100), flat = Math.round(pd.flat * 100), down = Math.round(pd.down * 100);
+      // Stacked horizontal bar
+      const bar =
+        '<div style="display:flex;height:30px;border-radius:8px;overflow:hidden;margin:6px 0 10px;font-family:var(--mono);font-size:11px;font-weight:700;">' +
+          (up>0 ? '<div style="width:' + up + '%;background:var(--green);color:#062b1e;display:flex;align-items:center;justify-content:center;">' + (up>=12?up+'%':'') + '</div>' : '') +
+          (flat>0 ? '<div style="width:' + flat + '%;background:var(--b2);color:var(--t1);display:flex;align-items:center;justify-content:center;">' + (flat>=12?flat+'%':'') + '</div>' : '') +
+          (down>0 ? '<div style="width:' + down + '%;background:var(--red);color:#2b0606;display:flex;align-items:center;justify-content:center;">' + (down>=12?down+'%':'') + '</div>' : '') +
+        '</div>';
+      return '<div class="card"><div class="ch">🎲 ' + (he?'התפלגות הסתברות (חודש)':'Probability Distribution (1mo)') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div>' +
+        '<div class="cb">' +
+          bar +
+          '<div style="display:flex;justify-content:space-around;text-align:center;">' +
+            '<div><div style="font-family:var(--mono);font-size:18px;font-weight:700;color:var(--green);">' + up + '%</div><div style="font-size:9px;color:var(--t3);">⬆️ ' + (he?'עלייה':'UP') + ' (>+2%)</div></div>' +
+            '<div><div style="font-family:var(--mono);font-size:18px;font-weight:700;color:var(--t2);">' + flat + '%</div><div style="font-size:9px;color:var(--t3);">➡️ ' + (he?'יציב':'FLAT') + ' (±2%)</div></div>' +
+            '<div><div style="font-family:var(--mono);font-size:18px;font-weight:700;color:var(--red);">' + down + '%</div><div style="font-size:9px;color:var(--t3);">⬇️ ' + (he?'ירידה':'DOWN') + ' (<-2%)</div></div>' +
+          '</div>' +
+          '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?'מתוך 1,000 תרחישי מונטה קרלו (נטול מגמה). סף ±2% ליציב.':'From the 1,000 Monte Carlo paths (driftless). ±2% flat band.') + '</div>' +
+        '</div></div>';
+    })()}
+
+    ${(() => {
+      // Technical Indicators card (OBV / MFI / ADX / volatility clustering)
+      const ind = d._indicators;
+      if (!ind || (!ind.obv && !ind.mfi && !ind.adx && !ind.volCluster)) return '';
+      const he = langMode === 'he';
+      const rows = [];
+      const colorFor = (good, bad, neutral) => good ? 'var(--green)' : bad ? 'var(--red)' : 'var(--t1)';
+      const addRow = (label, value, sub, color) => {
+        rows.push('<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--b1);">' +
+          '<div><span style="font-size:11px;color:var(--t2);font-weight:600;">' + label + '</span>' + (sub?'<span style="font-size:9px;color:var(--t3);margin-' + (he?'right':'left') + ':6px;">' + sub + '</span>':'') + '</div>' +
+          '<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:' + color + ';">' + value + '</span>' +
+        '</div>');
+      };
+      if (ind.adx) {
+        const c2 = ind.adx.strength==='strong'?'var(--green)':ind.adx.strength==='weak'?'var(--t3)':'var(--yellow)';
+        const dirArrow = ind.adx.direction==='up'?'↑':'↓';
+        addRow('ADX', ind.adx.adx + ' ' + dirArrow, he?(ind.adx.strength==='strong'?'מגמה חזקה':ind.adx.strength==='weak'?'דשדוש':'מגמה בינונית'):(ind.adx.strength + ' trend'), c2);
+      }
+      if (ind.mfi) {
+        const c2 = ind.mfi.zone==='oversold'?'var(--green)':ind.mfi.zone==='overbought'?'var(--red)':'var(--t1)';
+        addRow('MFI', String(ind.mfi.mfi), he?(ind.mfi.zone==='oversold'?'מכירת יתר':ind.mfi.zone==='overbought'?'קניית יתר':'ניטרלי'):ind.mfi.zone, c2);
+      }
+      if (ind.obv) {
+        const c2 = ind.obv.trend==='accumulation'?'var(--green)':ind.obv.trend==='distribution'?'var(--red)':'var(--t3)';
+        addRow('OBV', he?(ind.obv.trend==='accumulation'?'צבירה':ind.obv.trend==='distribution'?'הפצה':'ניטרלי'):ind.obv.trend, he?'נפח':'volume flow', c2);
+      }
+      if (ind.volCluster) {
+        const c2 = ind.volCluster.state==='turbulent'?'var(--red)':ind.volCluster.state==='calm'?'var(--green)':'var(--t1)';
+        addRow(he?'צבירת תנודתיות':'Vol Cluster', ind.volCluster.ratio + '×', he?(ind.volCluster.state==='turbulent'?'סוער':ind.volCluster.state==='calm'?'רגוע':'רגיל'):ind.volCluster.state, c2);
+      }
+      if (rows.length === 0) return '';
+      return '<div class="card"><div class="ch">📊 ' + (he?'אינדיקטורים טכניים':'Technical Indicators') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">CALC</span></div>' +
+        '<div class="cb">' + rows.join('') +
+          '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?'ADX=עוצמת מגמה · MFI=RSI משוקלל נפח · OBV=זרימת נפח · צבירת תנודתיות=תנודתיות אחרונה מול בסיס':'ADX=trend strength · MFI=volume-weighted RSI · OBV=volume flow · Vol Cluster=recent vs baseline volatility') + '</div>' +
+        '</div></div>';
+    })()}
+
     ${txtCard(tr('Key Catalysts'), d.key_catalysts, 'var(--green)')}
     ${txtCard('Key Risks', d.key_risks, 'var(--red)')}
     ${(()=>{
@@ -6579,6 +6789,8 @@ function renderAccDashboard(results) {
   // MAE (forecast vs actual, evaluated only) + benchmark excess vs SPY
   const maePairs = results.filter(r => r.actualPct != null && r.weekForecastPct != null && r.overallVerdict !== 'PENDING');
   const mae = maePairs.length ? maePairs.reduce((a,r)=>a+Math.abs(r.weekForecastPct - r.actualPct),0)/maePairs.length : null;
+  // RMSE (root mean squared error) — penalizes large misses more than MAE. Same pairs.
+  const rmse = maePairs.length ? Math.sqrt(maePairs.reduce((a,r)=>a+Math.pow(r.weekForecastPct - r.actualPct, 2),0)/maePairs.length) : null;
   const excPairs = results.filter(r => r.spyExcess != null && r.overallVerdict !== 'PENDING');
   const avgExcess = excPairs.length ? excPairs.reduce((a,r)=>a+r.spyExcess,0)/excPairs.length : null;
 
@@ -6687,7 +6899,8 @@ function renderAccDashboard(results) {
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">' + (he?'📐 מדדים מקצועיים':'📐 Professional Metrics') + '</div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + brierCard + sharpeCard + ddCard +
           '<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg);border-radius:7px;margin-top:6px;font-family:var(--mono);font-size:9px;color:var(--t3);flex-basis:100%;">' +
-            '<span>MAE (week): ' + (mae != null ? mae.toFixed(1) + 'pp' : (he?'— נצבר':'— accumulating')) + '</span>' +
+            '<span>MAE: ' + (mae != null ? mae.toFixed(1) + 'pp' : (he?'— נצבר':'—')) + '</span>' +
+            '<span>RMSE: ' + (rmse != null ? rmse.toFixed(1) + 'pp' : (he?'— נצבר':'—')) + '</span>' +
             '<span>vs SPY: ' + (avgExcess != null ? (avgExcess>=0?'+':'') + avgExcess.toFixed(1) + '% (n=' + excPairs.length + ')' : (he?'— נצבר':'— accumulating')) + '</span>' +
           '</div>' + avgCard + '</div>' +
           (pro.paperTrades > 0 ? '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;">' + (he?'מבוסס על סימולציית paper-trade של תחזיות שוריות בביטחון >70%. Sharpe שנתי (×√52). לא ייעוץ השקעות.':'Based on paper-trade simulation of >70% confidence bullish forecasts. Sharpe is annualized (×√52). Not investment advice.') + '</div>' : '') +
