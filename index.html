@@ -4223,6 +4223,72 @@ function calcSMADistance(closes) {
   };
 }
 
+// === Monte Carlo Simulation (bootstrap resampling of real returns) ===
+// Runs N random-walk scenarios for the price over `horizonDays`, resampling from
+// the stock's ACTUAL historical log-returns (not a Gaussian). Bootstrap preserves
+// the real distribution's fat tails and skew — more honest than assuming normality.
+// Returns percentile outcomes + probability of finishing positive.
+// Pure JS, on-demand: 1000 paths x ~21 steps = ~21k ops, sub-millisecond.
+function runMonteCarlo(closes, price, horizonDays, numPaths) {
+  if (!Array.isArray(closes) || closes.length < 20 || !price || price <= 0) return null;
+  const N = numPaths || 1000;
+  const H = horizonDays || 21;
+  // Real log-returns. Unlike the cone (which MAD-filters for a clean vol estimate),
+  // Monte Carlo deliberately KEEPS fat tails — real crash days are exactly the risk
+  // we want to simulate. We strip ONLY split-artifact-scale moves: a single-day move
+  // beyond ±40% (|log|>0.34) is almost never real for a tradable equity and is almost
+  // always a split/data glitch. A −15% or −22% crash day is preserved.
+  let rets = toLogReturns(closes.slice(-90)).filter(r => Math.abs(r) < 0.34);
+  if (rets.length < 15) return null;
+  // Demean → DRIFTLESS random walk. This isolates the VOLATILITY-driven range of
+  // outcomes (where price could land from uncertainty alone) without re-asserting
+  // recent momentum — direction is already covered by the AI forecast + factors.
+  // Fat tails are preserved (we only stripped split-scale artifacts above), so
+  // crash-day downside risk remains fully in the simulation.
+  const driftMean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  rets = rets.map(r => r - driftMean);
+
+  const finals = [];      // ending price of each path
+  const minDraws = [];    // lowest point reached on each path (for drawdown stats)
+  const R = rets.length;
+  for (let p = 0; p < N; p++) {
+    let logP = Math.log(price);
+    let pathMin = price;
+    for (let d = 0; d < H; d++) {
+      // Bootstrap: draw a random historical daily log-return (with replacement)
+      logP += rets[(Math.random() * R) | 0];
+      const cur = Math.exp(logP);
+      if (cur < pathMin) pathMin = cur;
+    }
+    finals.push(Math.exp(logP));
+    minDraws.push(pathMin);
+  }
+  finals.sort((a, b) => a - b);
+  minDraws.sort((a, b) => a - b);
+
+  const pct = (arr, q) => {
+    const idx = Math.min(arr.length - 1, Math.max(0, Math.round(q * (arr.length - 1))));
+    return arr[idx];
+  };
+  const probGreen = finals.filter(v => v > price).length / N;
+  // Probability of touching -10% at any point during the horizon (path-dependent)
+  const touch10 = minDraws.filter(v => v <= price * 0.90).length / N;
+  const mean = finals.reduce((a, b) => a + b, 0) / N;
+
+  const toPct = v => ((v - price) / price) * 100;
+  return {
+    horizonDays: H, paths: N, samplesUsed: R,
+    price,
+    p5:  pct(finals, 0.05),  p25: pct(finals, 0.25), p50: pct(finals, 0.50),
+    p75: pct(finals, 0.75),  p95: pct(finals, 0.95),
+    mean,
+    probGreen,
+    touchMinus10: touch10,
+    // convenience % moves
+    p5Pct: toPct(pct(finals,0.05)), p50Pct: toPct(pct(finals,0.50)), p95Pct: toPct(pct(finals,0.95)),
+  };
+}
+
 // === Statistical Probability Cone (1-SD bounds from realized volatility) ===
 // Uses the standard deviation of daily returns to project a ~68% (1-SD) range
 // for where price should realistically trade. Scales by √(trading days).
@@ -4878,6 +4944,8 @@ async function runAnalysis(sym) {
       // Statistical probability cone (1-SD bounds) for reality-checking AI targets
       const pr2 = parseFloat(liveData?.price) || cl[cl.length-1];
       parsed._probCone = calcProbabilityCone(cl, pr2);
+      // Monte Carlo: 1,000 driftless bootstrap paths → full outcome distribution (1-month horizon)
+      try { parsed._monteCarlo = runMonteCarlo(cl, pr2, 21, 1000); } catch(_) { parsed._monteCarlo = null; }
       // Concentration risk vs current watchlist holdings (Pearson r > 0.75)
       parsed._concentrationRisk = findConcentrationRisk(t, cl);
     } catch(_) {}
@@ -5788,6 +5856,69 @@ function renderAnalysis(ticker, d) {
           (pc.halfYear ? row(he?'חצי שנה':'6 Months', pc.halfYear) : '') +
           (pc.year ? row(he?'שנה':'1 Year', pc.year) : '') +
           '<div style="font-size:8px;color:var(--t3);margin-top:4px;font-style:italic;">' + (he?'אם יעד ה-AI מחוץ לטווח הזה — הוא אגרסיבי סטטיסטית. השווה למספרים של קלוד למעלה.':'If an AI target sits outside this range, it is statistically aggressive. Cross-check against Claude\'s targets above.') + '</div>' +
+        '</div></div>';
+    })()}
+
+    ${(() => {
+      // Monte Carlo simulation — full outcome distribution from 1,000 driftless bootstrap paths
+      const mc = d._monteCarlo;
+      if (!mc) return '';
+      const he = langMode === 'he';
+      const greenPct = Math.round(mc.probGreen * 100);
+      const touchPct = Math.round(mc.touchMinus10 * 100);
+      // Percentile ladder rows
+      const ladder = [
+        { lbl: he?'הגרוע (5%)':'Worst (5th)',  v: mc.p5,  pct: mc.p5Pct,  col: 'var(--red)' },
+        { lbl: he?'נמוך (25%)':'Low (25th)',    v: mc.p25, pct: ((mc.p25-mc.price)/mc.price*100), col: 'var(--t2)' },
+        { lbl: he?'חציון (50%)':'Median (50th)', v: mc.p50, pct: mc.p50Pct, col: 'var(--t1)', bold: true },
+        { lbl: he?'גבוה (75%)':'High (75th)',   v: mc.p75, pct: ((mc.p75-mc.price)/mc.price*100), col: 'var(--t2)' },
+        { lbl: he?'הטוב (95%)':'Best (95th)',   v: mc.p95, pct: mc.p95Pct, col: 'var(--green)' },
+      ];
+      const ladderHtml = ladder.map(r =>
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;' + (r.bold?'border-top:1px solid var(--b1);border-bottom:1px solid var(--b1);':'') + '">' +
+          '<span style="font-size:10px;color:var(--t3);' + (r.bold?'font-weight:700;':'') + '">' + r.lbl + '</span>' +
+          '<span style="display:flex;gap:8px;align-items:baseline;">' +
+            '<span style="font-family:var(--mono);font-size:' + (r.bold?'13':'12') + 'px;font-weight:700;color:' + r.col + ';">$' + r.v.toFixed(2) + '</span>' +
+            '<span style="font-family:var(--mono);font-size:10px;color:' + r.col + ';min-width:46px;text-align:right;">' + (r.pct>=0?'+':'') + r.pct.toFixed(1) + '%</span>' +
+          '</span>' +
+        '</div>'
+      ).join('');
+      // Visual range bar: p5..p95 mapped to 0..100, interquartile box shaded, median marked
+      const span = mc.p95 - mc.p5;
+      const pos = (v) => span > 0 ? Math.max(0, Math.min(100, ((v - mc.p5) / span) * 100)) : 50;
+      const boxL = pos(mc.p25), boxR = pos(mc.p75), medX = pos(mc.p50), curX = pos(mc.price);
+      const bar =
+        '<div style="position:relative;height:30px;margin:10px 0 6px;">' +
+          '<div style="position:absolute;top:13px;left:0;right:0;height:4px;background:var(--b2);border-radius:2px;"></div>' +
+          '<div style="position:absolute;top:11px;left:' + boxL + '%;width:' + (boxR-boxL) + '%;height:8px;background:rgba(77,168,255,.35);border-radius:3px;"></div>' +
+          '<div style="position:absolute;top:8px;left:' + medX + '%;width:2px;height:14px;background:var(--t1);"></div>' +
+          '<div style="position:absolute;top:6px;left:' + curX + '%;width:2px;height:18px;background:var(--yellow);"></div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--t3);font-family:var(--mono);"><span>' + (he?'קו צהוב = מחיר נוכחי':'yellow = now') + '</span><span>' + (he?'תיבה כחולה = 50% מהתרחישים':'blue box = middle 50%') + '</span></div>';
+
+      return '<div class="card"><div class="ch">🎲 ' + (he?'סימולציית מונטה קרלו':'Monte Carlo Simulation') + ' <span style="font-size:9px;background:var(--blue);color:var(--bg);padding:1px 5px;border-radius:3px;">' + mc.paths.toLocaleString() + ' ' + (he?'תרחישים':'PATHS') + '</span></div>' +
+        '<div class="cb">' +
+          '<div style="font-size:10px;color:var(--t3);margin-bottom:4px;line-height:1.5;">' +
+            (he ? ('1,000 הליכות אקראיות על בסיס התנהגות המניה ב-90 הימים האחרונים, אופק חודש. טווח התוצאות מהתנודתיות בלבד:')
+                : ('1,000 random walks based on the stock\'s last 90 days of behavior, 1-month horizon. Range of outcomes from volatility alone:')) +
+          '</div>' +
+          bar +
+          ladderHtml +
+          // Two key probabilities
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">' +
+            '<div style="text-align:center;padding:10px;background:var(--bg);border-radius:8px;">' +
+              '<div style="font-family:var(--mono);font-size:22px;font-weight:700;color:' + (greenPct>=50?'var(--green)':'var(--t1)') + ';">' + greenPct + '%</div>' +
+              '<div style="font-size:9px;color:var(--t3);">' + (he?'מסיימות בירוק':'finish green') + '</div>' +
+            '</div>' +
+            '<div style="text-align:center;padding:10px;background:var(--bg);border-radius:8px;">' +
+              '<div style="font-family:var(--mono);font-size:22px;font-weight:700;color:' + (touchPct>=40?'var(--red)':'var(--yellow)') + ';">' + touchPct + '%</div>' +
+              '<div style="font-size:9px;color:var(--t3);">' + (he?'נוגעות ב--10% בדרך':'dip to -10% en route') + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div style="font-size:8px;color:var(--t3);margin-top:8px;font-style:italic;line-height:1.5;">' +
+            (he ? ('הליכה אקראית נטולת מגמה — מבודדת את טווח אי-הוודאות, לא תחזית כיוון (הכיוון מטופל ע"י קלוד והפקטורים). מניחה ימים בלתי-תלויים; אינה מודלת צבירת תנודתיות.')
+                : ('Driftless random walk — isolates the uncertainty range, not direction (direction is handled by Claude + factors above). Assumes independent days; does not model volatility clustering.')) +
+          '</div>' +
         '</div></div>';
     })()}
 
