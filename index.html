@@ -451,50 +451,25 @@ body.lang-he .fc-tf {
     </div>
     <button id="ltPicksBtn" onclick="renderLongTermPicks()" style="width:100%;margin-top:6px;background:transparent;border:1px dashed var(--b2);color:var(--t3);padding:7px;border-radius:8px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;">📋 My Long-Term Picks</button>
 
-    <!-- Quick Buy Decision -->
-    <div style="margin-top:12px;background:linear-gradient(135deg,rgba(57,217,138,.06),rgba(77,168,255,.04));border:1px solid rgba(57,217,138,.2);border-radius:10px;padding:12px;">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
-        <span style="font-size:13px;">💰</span>
-        <span style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--green);letter-spacing:.05em;">QUICK DECISION</span>
-        <span style="font-size:10px;color:var(--t3);">— Worth Buying Today?</span>
+
+    <!-- Discover -->
+    <div style="margin-top:14px;">
+      <div style="font-family:var(--mono);font-size:9px;color:var(--t3);font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px;padding-left:2px;">🔍 Discover</div>
+      <div style="display:grid;grid-template-columns:1fr;gap:7px;">
+        <button onclick="showTopPick()" id="topPickBtn"
+          style="background:var(--s1);border:1px solid var(--b1);color:var(--t2);padding:11px 13px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:9px;letter-spacing:.02em;width:100%;text-align:left;transition:all .15s;"
+          onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'"
+          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">🏆 Top Pick Today — All Signals Green</button>
+        <button id="wsbBtn2" onclick="showWSB()"
+          style="background:var(--s1);border:1px solid var(--b1);color:var(--t2);padding:11px 13px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:9px;letter-spacing:.02em;width:100%;text-align:left;transition:all .15s;"
+          onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'"
+          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">🚀 WSB Hot — Last 24h</button>
+        <button onclick="showSentimentConsensus()"
+          style="background:var(--s1);border:1px solid var(--b1);color:var(--t2);padding:11px 13px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:9px;letter-spacing:.02em;width:100%;text-align:left;transition:all .15s;"
+          onmouseover="this.style.borderColor='var(--blue)';this.style.color='var(--blue)'"
+          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">🎯 Sentiment Consensus — WSB + Trends + Fear &amp; Greed</button>
       </div>
-      <div style="display:flex;gap:8px;">
-        <input class="ti" id="quickTicker" placeholder="Ticker (e.g. NVDA)" maxlength="10"
-          style="flex:1;background:var(--bg);border:1px solid var(--b1);color:var(--t1);padding:9px 12px;border-radius:7px;font-family:var(--mono);font-size:13px;outline:none;">
-        <button onclick="quickDecision()" id="quickBtn"
-          style="background:var(--green);color:var(--bg);border:none;padding:9px 14px;border-radius:7px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
-          ⚡ Decide
-        </button>
-      </div>
-    </div>
-
-  <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:12px;">
-
-    <button onclick="showTopPick()" id="topPickBtn"
-      style="background:linear-gradient(135deg,rgba(57,217,138,.15),rgba(77,168,255,.1));border:1px solid rgba(57,217,138,.4);color:var(--green);padding:12px;font-family:var(--mono);font-size:11px;cursor:pointer;border-radius:10px;transition:all .15s;letter-spacing:.03em;font-weight:700;width:100%;"
-      onmouseover="this.style.borderColor='var(--green)';this.style.background='rgba(57,217,138,.25)'"
-      onmouseout="this.style.borderColor='rgba(57,217,138,.4)';this.style.background='linear-gradient(135deg,rgba(57,217,138,.15),rgba(77,168,255,.1))'">
-      🏆 TOP PICK TODAY — All Signals Green
-    </button>
-
-    <button class="btn" id="wsbBtn2" onclick="showWSB()"
-      style="background:transparent;border:1px solid var(--b2);color:var(--t2);padding:10px;font-family:var(--mono);font-size:10px;cursor:pointer;border-radius:8px;transition:all .15s;letter-spacing:.03em;"
-      onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'"
-      onmouseout="this.style.borderColor='var(--b2)';this.style.color='var(--t2)'">
-      🚀 WSB Hot — Last 24h
-    </button>
-    <button onclick="showScanner()"
-      style="background:linear-gradient(135deg,var(--green),var(--blue));color:var(--bg);border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;"
-      onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
-      ⚡ Opportunity Scanner — Find Stocks About to Move
-    </button>
-    <button onclick="showSentimentConsensus()"
-      style="background:linear-gradient(135deg,#7c3aed,#ea580c);color:#ffffff;border:none;padding:12px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:8px;letter-spacing:.03em;width:100%;margin-top:2px;transition:opacity .15s;text-shadow:0 1px 3px rgba(0,0,0,.4);"
-      onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
-      🎯 Sentiment Consensus — WSB + Trends + Fear &amp; Greed
-    </button>
-  </div>
-  </div>
+    </div>  </div>
   <div class="content" id="analyzeContent">
     <div class="empty">
       <div class="empty-icon">📡</div>
@@ -533,10 +508,8 @@ body.lang-he .fc-tf {
           <div style="font-family:var(--mono);font-size:9px;color:var(--green);font-weight:700;margin-bottom:8px;letter-spacing:.05em;" id="legendActions">🔍 ANALYSIS TOOLS</div>
           <div style="display:flex;flex-direction:column;gap:7px;font-size:11px;color:var(--t2);line-height:1.4;">
             <div><span style="font-size:13px;">▶️</span> <b id="lg-run">RUN</b> — <span id="lg-run-d">Full deep analysis of one stock: forecasts, signals, fundamentals & outlook</span></div>
-            <div><span style="font-size:13px;">💰</span> <b id="lg-quick">Quick Decision</b> — <span id="lg-quick-d">Fast Buy/Wait/Skip verdict for one stock with entry, stop & target</span></div>
             <div><span style="font-size:13px;">🏆</span> <b id="lg-top">Top Pick Today</b> — <span id="lg-top-d">Scans trending stocks for the one with the most bullish signals aligned</span></div>
             <div><span style="font-size:13px;">🚀</span> <b id="lg-wsb">WSB Hot</b> — <span id="lg-wsb-d">Most-discussed stocks on Reddit WallStreetBets in the last 24h</span></div>
-            <div><span style="font-size:13px;">⚡</span> <b id="lg-opp">Opportunity Scanner</b> — <span id="lg-opp-d">Finds stocks showing early signs of a potential move</span></div>
             <div><span style="font-size:13px;">🎯</span> <b id="lg-sent">Sentiment Consensus</b> — <span id="lg-sent-d">Combines WSB buzz, volume & market mood into one score</span></div>
             <div><span style="font-size:13px;">🎰</span> <b id="lg-penny">Penny Stock Scanner</b> — <span id="lg-penny-d">High-risk speculative picks under $1.00 (gamble territory)</span></div>
           </div>
@@ -665,7 +638,7 @@ body.lang-he .fc-tf {
 <!-- App Footer: copyright + financial disclaimer -->
 <footer style="max-width:760px;margin:32px auto 24px;padding:18px 20px;border-top:1px solid var(--b1);text-align:center;">
   <div style="font-family:var(--mono);font-size:11px;color:var(--t3);letter-spacing:.02em;margin-bottom:8px;">
-    &copy; 2026 Nir Vardi. All rights reserved. · StockOracle Pro · v1.0.31
+    &copy; 2026 Nir Vardi. All rights reserved. · StockOracle Pro · v1.0.33
   </div>
   <div id="footerDisclaimer" style="font-size:10px;line-height:1.6;color:var(--t3);opacity:.85;max-width:620px;margin:0 auto;">
     <b style="color:var(--t3);">Disclaimer:</b> This application is for educational and personal entertainment purposes only. The quantitative analysis, confidence scores, and position-sizing recommendations generated by this tool do not constitute investment advice, financial advice, trading advice, or any other sort of advice. All trading decisions are made at the user's independent discretion and risk.
@@ -1905,10 +1878,8 @@ function translateLegend() {
 
   // Actions
   set('lg-run','RUN','הרץ'); set('lg-run-d','Full deep analysis of one stock: forecasts, signals, fundamentals & outlook','ניתוח עומק מלא של מניה: תחזיות, אותות, נתונים פיננסיים ואופק');
-  set('lg-quick','Quick Decision','החלטה מהירה'); set('lg-quick-d','Fast Buy/Wait/Skip verdict for one stock with entry, stop & target','פסיקה מהירה קנה/המתן/דלג עם כניסה, סטופ ויעד');
   set('lg-top','Top Pick Today','בחירת היום'); set('lg-top-d','Scans trending stocks for the one with the most bullish signals aligned','סורק מניות מדוברות ומוצא את זו עם הכי הרבה אותות חיוביים');
   set('lg-wsb','WSB Hot','WSB חם'); set('lg-wsb-d','Most-discussed stocks on Reddit WallStreetBets in the last 24h','המניות הכי מדוברות ב-Reddit WallStreetBets ב-24 השעות האחרונות');
-  set('lg-opp','Opportunity Scanner','סורק הזדמנויות'); set('lg-opp-d','Finds stocks showing early signs of a potential move','מוצא מניות עם סימנים מוקדמים לתנועה אפשרית');
   set('lg-sent','Sentiment Consensus','קונצנזוס סנטימנט'); set('lg-sent-d','Combines WSB buzz, volume & market mood into one score','משלב באזז WSB, נפח ומצב רוח שוק לציון אחד');
   set('lg-penny','Penny Stock Scanner','סורק מניות אגורה'); set('lg-penny-d','High-risk speculative picks under $1.00 (gamble territory)','בחירות ספקולטיביות בסיכון גבוה מתחת ל-$1.00 (טריטוריית הימור)');
 
@@ -7023,6 +6994,15 @@ function horizonActualPct(series, forecastMs, forecastPrice, horizonDays, daysSi
       const p = priceAtDate(series, forecastMs + horizonDays * 86400000);
       if (p != null) return { pct: ((p - forecastPrice) / forecastPrice) * 100, status: 'accurate' };
     }
+    // Time-bounded live-price fallback: if the exact horizon-date price was unavailable
+    // (flaky free CORS proxies) but the forecast matured RECENTLY and we have a live price,
+    // today's price is a fair proxy for the horizon outcome — a REAL observed price, just
+    // measured a few days off the exact mark. Flagged 'approx' so it is never confused with a
+    // precise historical measurement. Bounded to horizon+14d (beyond that, today's price says
+    // nothing useful about the horizon move, so we stay honest and report unavailable).
+    if (currentPrice && forecastPrice && daysSince != null && daysSince <= horizonDays + 14) {
+      return { pct: ((currentPrice - forecastPrice) / forecastPrice) * 100, status: 'approx' };
+    }
     return { pct: null, status: 'unavailable' }; // honest: could not verify — caller must notify + retry
   }
   // Not matured yet → current-price trajectory is honest (verdict shows PENDING / on-track, not final)
@@ -7218,13 +7198,13 @@ async function runAllAccuracy(opts) {
       // Record the outcome ONLY when the week horizon was evaluated from a REAL historical
       // price. If data was unavailable, we deliberately DON'T record — the forecast stays
       // open and is retried on the next check/open (truth over a fabricated number).
-      if (weekH.status === 'accurate' && overallVerdict !== 'PENDING' && overallVerdict !== 'DATA-UNAVAILABLE') {
+      if ((weekH.status === 'accurate' || weekH.status === 'approx') && overallVerdict !== 'PENDING' && overallVerdict !== 'DATA-UNAVAILABLE') {
         const hist = forecastHistory.find(r =>
           r.ticker === entry.ticker && r.signalScores && (!r.outcomes || !r.outcomes.week)
         );
         if (hist) {
           hist.outcomes = hist.outcomes || {};
-          hist.outcomes.week = { verdict: overallVerdict, actualChange: weekH.pct };
+          hist.outcomes.week = { verdict: overallVerdict, actualChange: weekH.pct, approx: weekH.status === 'approx' };
         }
       }
     } catch(e) {
