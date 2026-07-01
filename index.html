@@ -455,19 +455,31 @@ body.lang-he .fc-tf {
     <!-- Discover -->
     <div style="margin-top:14px;">
       <div style="font-family:var(--mono);font-size:9px;color:var(--t3);font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px;padding-left:2px;">🔍 Discover</div>
-      <div style="display:grid;grid-template-columns:1fr;gap:7px;">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;">
         <button onclick="showTopPick()" id="topPickBtn"
-          style="background:var(--s1);border:1px solid var(--b1);color:var(--t2);padding:11px 13px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:9px;letter-spacing:.02em;width:100%;text-align:left;transition:all .15s;"
-          onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'"
-          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">🏆 Top Pick Today — All Signals Green</button>
-        <button id="wsbBtn2" onclick="showWSB()"
-          style="background:var(--s1);border:1px solid var(--b1);color:var(--t2);padding:11px 13px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:9px;letter-spacing:.02em;width:100%;text-align:left;transition:all .15s;"
+          style="background:rgba(184,120,0,.08);background:color-mix(in srgb, var(--yellow) 10%, var(--s1));border:1px solid var(--b1);border-top:3px solid var(--yellow);color:var(--t2);padding:10px 6px 9px;font-family:var(--mono);cursor:pointer;border-radius:9px;text-align:center;transition:all .15s;"
+          onmouseover="this.style.borderColor='var(--yellow)';this.style.color='var(--yellow)'"
+          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">
+          <div style="font-size:17px;line-height:1;">🏆</div>
+          <div style="font-size:10px;font-weight:700;margin-top:5px;letter-spacing:.01em;">Top Pick</div>
+          <div style="font-size:8px;color:var(--t3);margin-top:2px;line-height:1.25;">All signals green</div>
+        </button>
+        <button onclick="showWSB()" id="wsbBtn2"
+          style="background:rgba(194,96,16,.08);background:color-mix(in srgb, var(--orange) 10%, var(--s1));border:1px solid var(--b1);border-top:3px solid var(--orange);color:var(--t2);padding:10px 6px 9px;font-family:var(--mono);cursor:pointer;border-radius:9px;text-align:center;transition:all .15s;"
           onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'"
-          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">🚀 WSB Hot — Last 24h</button>
+          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">
+          <div style="font-size:17px;line-height:1;">🚀</div>
+          <div style="font-size:10px;font-weight:700;margin-top:5px;letter-spacing:.01em;">WSB Hot</div>
+          <div style="font-size:8px;color:var(--t3);margin-top:2px;line-height:1.25;">Last 24h</div>
+        </button>
         <button onclick="showSentimentConsensus()"
-          style="background:var(--s1);border:1px solid var(--b1);color:var(--t2);padding:11px 13px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;border-radius:9px;letter-spacing:.02em;width:100%;text-align:left;transition:all .15s;"
+          style="background:rgba(26,107,191,.08);background:color-mix(in srgb, var(--blue) 10%, var(--s1));border:1px solid var(--b1);border-top:3px solid var(--blue);color:var(--t2);padding:10px 6px 9px;font-family:var(--mono);cursor:pointer;border-radius:9px;text-align:center;transition:all .15s;"
           onmouseover="this.style.borderColor='var(--blue)';this.style.color='var(--blue)'"
-          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">🎯 Sentiment Consensus — WSB + Trends + Fear &amp; Greed</button>
+          onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'">
+          <div style="font-size:17px;line-height:1;">🎯</div>
+          <div style="font-size:10px;font-weight:700;margin-top:5px;letter-spacing:.01em;">Sentiment</div>
+          <div style="font-size:8px;color:var(--t3);margin-top:2px;line-height:1.25;">WSB+Trends+F&amp;G</div>
+        </button>
       </div>
     </div>
     <div id="calibProgress" style="margin-top:12px;"></div>
@@ -640,7 +652,7 @@ body.lang-he .fc-tf {
 <!-- App Footer: copyright + financial disclaimer -->
 <footer style="max-width:760px;margin:32px auto 24px;padding:18px 20px;border-top:1px solid var(--b1);text-align:center;">
   <div style="font-family:var(--mono);font-size:11px;color:var(--t3);letter-spacing:.02em;margin-bottom:8px;">
-    &copy; 2026 Nir Vardi. All rights reserved. · StockOracle Pro · v1.0.45
+    &copy; 2026 Nir Vardi. All rights reserved. · StockOracle Pro · v1.0.47
   </div>
   <div id="footerDisclaimer" style="font-size:10px;line-height:1.6;color:var(--t3);opacity:.85;max-width:620px;margin:0 auto;">
     <b style="color:var(--t3);">Disclaimer:</b> This application is for educational and personal entertainment purposes only. The quantitative analysis, confidence scores, and position-sizing recommendations generated by this tool do not constitute investment advice, financial advice, trading advice, or any other sort of advice. All trading decisions are made at the user's independent discretion and risk.
@@ -779,21 +791,35 @@ function withTimeout(promise, ms=6000) {
 }
 
 // === TOP PICK TODAY — All Signals Convergence Scanner ===
+// Rebuilds the compact Discover chip's inner HTML (icon + title + subtitle) -- used to
+// restore topPickBtn/wsbBtn2 after a scan instead of overwriting them with old flat text
+// that no longer fits the 3-column chip layout.
+function topPickChipHTML() {
+  return '<div style="font-size:17px;line-height:1;">🏆</div>'
+    + '<div style="font-size:10px;font-weight:700;margin-top:5px;letter-spacing:.01em;">Top Pick</div>'
+    + '<div style="font-size:8px;color:var(--t3);margin-top:2px;line-height:1.25;">All signals green</div>';
+}
+function wsbChipHTML() {
+  return '<div style="font-size:17px;line-height:1;">🚀</div>'
+    + '<div style="font-size:10px;font-weight:700;margin-top:5px;letter-spacing:.01em;">WSB Hot</div>'
+    + '<div style="font-size:8px;color:var(--t3);margin-top:2px;line-height:1.25;">Last 24h</div>';
+}
+
 async function showTopPick() {
   const btn = document.getElementById('topPickBtn');
-  if (btn) { btn.textContent = '⏳ Scanning all signals...'; btn.disabled = true; }
+  if (btn) { btn.textContent = '⏳ Scanning…'; btn.disabled = true; }
 
   // Rate limit check
   if (window._rateLimitUntil && Date.now() < window._rateLimitUntil) {
     const sec = Math.ceil((window._rateLimitUntil - Date.now()) / 1000);
-    if (btn) { btn.textContent = '🏆 TOP PICK TODAY — All Signals Green'; btn.disabled = false; }
+    if (btn) { btn.innerHTML = topPickChipHTML(); btn.disabled = false; }
     alert('Rate limit — wait ' + sec + 's');
     return;
   }
 
   // Remove old result
   const oldResult = document.getElementById('topPickResult');
-  if (oldResult) { oldResult.remove(); if (btn) { btn.textContent = '🏆 TOP PICK TODAY — All Signals Green'; btn.disabled = false; } return; }
+  if (oldResult) { oldResult.remove(); if (btn) { btn.innerHTML = topPickChipHTML(); btn.disabled = false; } return; }
 
   // Raise cache TTL during the multi-stock scan to avoid rate limits.
   // Restored to the fast default in the finally block below.
@@ -1090,7 +1116,7 @@ async function showTopPick() {
     progress.innerHTML = '<div style="padding:16px;color:var(--' + (isRate ? 'yellow' : 'red') + ');font-size:12px;background:var(--s1);border-radius:10px;">⚠️ ' + errMsg + '</div>';
   } finally {
     _activeCacheTTL = PRICE_CACHE_TTL; // restore fast 20s default after scan
-    if (btn) { btn.textContent = '🏆 TOP PICK TODAY — All Signals Green'; btn.disabled = false; }
+    if (btn) { btn.innerHTML = topPickChipHTML(); btn.disabled = false; }
   }
 }
 
@@ -8830,7 +8856,7 @@ async function showWSB() {
   } catch(e) {
     alert('⚠️ ' + e.message);
   } finally {
-    btn.textContent = '🚀 WSB Top 5'; btn.disabled = false;
+    btn.innerHTML = wsbChipHTML(); btn.disabled = false;
   }
 }
 
