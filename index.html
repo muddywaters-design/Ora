@@ -247,6 +247,67 @@ input.ti::placeholder{text-transform:none;color:var(--t3);font-size:12px;}
   .fc-grid{grid-template-columns:1fr 1fr;}
 }
 
+
+/* ── DESKTOP (>= 1024px) ─────────────────────────────────────────────────────
+   Purely additive. Every rule below sits inside one min-width query, so the
+   phone layout is untouched by construction -- nothing here can apply below
+   1024px, which is why this carries no risk to the mobile experience.
+
+   The phone design is deliberately kept: same components, same colours, same
+   type. What changes is what a large screen makes possible and a phone does
+   not: navigation that is always visible instead of hidden behind a tap,
+   density suited to a mouse rather than a thumb, and using the horizontal
+   space instead of a 960px ribbon marooned in the middle of a 1440px display.
+
+   The one thing NOT widened: prose. Reading measure gets worse past roughly
+   80 characters, so the analysis text stays readable while the data grids
+   spread out. Wider is not automatically better. */
+@media (min-width: 1024px) {
+
+  /* Navigation becomes permanent furniture. On a phone the drawer is right --
+     screen space is scarce and it is one thumb-reach away. On a desktop it is
+     a click tax on every single navigation, several times an hour. */
+  .drawer { left: 0; width: 216px; transition: none; box-shadow: none; }
+  .drawer-overlay, .drawer-overlay.open { display: none !important; }
+  .hamburger { display: none; }
+  .topbar { padding-left: 232px; }
+  .page { padding-left: 216px; }
+  .nav-item { padding: 9px 12px; font-size: 13px; }
+
+  /* Content gets the width it has been missing, but capped: past ~1280px the
+     eye has to travel too far between a row's first and last column. */
+  .panel { max-width: 1280px; padding: 22px 28px; gap: 16px; }
+
+  /* Denser controls. Touch targets are sized for fingers; a mouse is precise,
+     so the same padding just wastes vertical space you could be reading. */
+  .analyze-top { padding: 12px 28px; }
+  input.ti { padding: 9px 14px; }
+  .btn-g { padding: 9px 20px; }
+  .wl-row { padding: 10px 20px; }
+
+  /* Four horizons across in one glance -- the comparison the page is FOR.
+     On a phone these stack and you scroll between them, which makes comparing
+     week against year an act of memory rather than of looking. */
+  .fc-grid { grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .sg-grid { grid-template-columns: repeat(5, 1fr); gap: 10px; }
+
+  /* Discover chips in a single row rather than a 2x2 block. */
+  #page-analyze .disc-grid { grid-template-columns: repeat(4, 1fr) !important; }
+
+  /* Scrollbars become visible again: on a phone they are transient overlays,
+     on a desktop an almost-invisible 4px thumb is genuinely hard to grab. */
+  .page::-webkit-scrollbar, .content::-webkit-scrollbar { width: 10px; }
+  .page::-webkit-scrollbar-thumb, .content::-webkit-scrollbar-thumb { border-radius: 5px; }
+
+  /* Hover affordances only where a pointer actually exists. */
+  .wl-row:hover { background: var(--s2); }
+}
+
+/* Very wide displays: hold the reading measure, let the shell breathe. */
+@media (min-width: 1600px) {
+  .panel { max-width: 1400px; }
+}
+
 /* Light theme */
 body.light {
   --bg: #f0f4f8;
@@ -474,7 +535,7 @@ body.lang-he .fc-tf {
     <!-- Discover -->
     <div style="margin-top:14px;">
       <div style="font-family:var(--mono);font-size:9px;color:var(--t3);font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px;padding-left:2px;">🔍 Discover</div>
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:7px;">
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:7px;" class="disc-grid">
         <button onclick="showTopPick()" id="topPickBtn"
           style="background:rgba(184,120,0,.08);background:color-mix(in srgb, var(--yellow) 10%, var(--s1));border:1px solid var(--b1);border-top:3px solid var(--yellow);color:var(--t2);padding:10px 6px 9px;font-family:var(--mono);cursor:pointer;border-radius:9px;text-align:center;transition:all .15s;"
           onmouseover="this.style.borderColor='var(--yellow)';this.style.color='var(--yellow)'"
@@ -665,7 +726,7 @@ body.lang-he .fc-tf {
 <!-- App Footer: copyright + financial disclaimer -->
 <footer style="max-width:760px;margin:32px auto 24px;padding:18px 20px;border-top:1px solid var(--b1);text-align:center;">
   <div style="font-family:var(--mono);font-size:11px;color:var(--t3);letter-spacing:.02em;margin-bottom:8px;">
-    &copy; 2026 Nir Vardi. All rights reserved. · StockOracle Pro · v1.0.92
+    &copy; 2026 Nir Vardi. All rights reserved. · StockOracle Pro · v1.0.94
   </div>
   <div id="footerDisclaimer" style="font-size:10px;line-height:1.6;color:var(--t3);opacity:.85;max-width:620px;margin:0 auto;">
     <b style="color:var(--t3);">Disclaimer:</b> This application is for educational and personal entertainment purposes only. The quantitative analysis, confidence scores, and position-sizing recommendations generated by this tool do not constitute investment advice, financial advice, trading advice, or any other sort of advice. All trading decisions are made at the user's independent discretion and risk.
@@ -3679,14 +3740,21 @@ async function fetchExchangeRate(from, to) {
   if (from === to) return 1;
   const pair = `${from}${to}=X`;
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${pair}?interval=1d&range=1d`;
-  const proxies = ['https://corsproxy.io/?','https://api.allorigins.win/raw?url=','https://api.codetabs.com/v1/proxy?quest='];
-  for (const proxy of proxies) {
+  // FIX (v1.0.94): this used a hardcoded list of three public proxies and never benefited from
+  // the private Worker, so on a network where those proxies are blocked it ALWAYS returned null
+  // -- and the caller then silently treated the amount as if it were dollars. Now it uses the
+  // same proxy chain as everything else, and caches the rate for the session so a portfolio page
+  // does not re-fetch it per position.
+  window._fxCache = window._fxCache || {};
+  const ck = pair + '_' + Math.floor(Date.now() / (30 * 60 * 1000)); // 30-minute bucket
+  if (window._fxCache[ck]) return window._fxCache[ck];
+  for (const proxy of _proxyChain()) {
     try {
-      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(4000)});
+      const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(6000)});
       if (!r.ok) continue;
       const data = await r.json();
       const rate = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
-      if (rate) return rate;
+      if (rate > 0) { window._fxCache[ck] = rate; return rate; }
     } catch(_) {}
   }
   return null;
@@ -12630,7 +12698,12 @@ function calcPosition() {
       if (type === 'shares') {
         investedUSD = value * priceUSD;
       } else {
-        investedUSD = currency === 'USD' ? value : (rate ? value / rate : value);
+        // same honesty rule as the save path: no rate means no number, not a 1:1 guess
+        if (currency !== 'USD' && !(rate > 0)) {
+          preview.innerHTML = '<div style="padding:10px;background:rgba(255,208,96,.08);border:1px solid rgba(255,208,96,.25);border-radius:8px;font-size:11px;color:var(--t2);">Exchange rate for ' + currency + ' is unavailable right now \u2014 cannot convert. Try again shortly, or switch to USD.</div>';
+          return;
+        }
+        investedUSD = currency === 'USD' ? value : value / rate;
       }
 
       // Calculate shares
@@ -12736,13 +12809,26 @@ async function addPosition() {
     }
   }
 
-  // Convert to USD: investedUSD = investedCurrency / rate
+  // Convert to USD. CRITICAL (v1.0.94): the old fallback here was `rate ? value / rate : value`
+  // -- when the rate lookup failed it treated the amount as DOLLARS. A 100 ILS purchase was
+  // recorded as $100 instead of ~$27, overstating the position by ~3.7x and corrupting every
+  // portfolio total downstream. A wrong number is worse than a refusal, so it now refuses.
   let investedUSD;
   if (type === 'shares') {
     investedUSD = value * entryPrice;
+  } else if (currency === 'USD') {
+    investedUSD = value;
+  } else if (rate > 0) {
+    investedUSD = value / rate;
   } else {
-    investedUSD = currency === 'USD' ? value : (rate ? value / rate : value);
+    alert('Could not get the ' + currency + '/USD exchange rate right now, so this purchase cannot be'
+      + ' recorded accurately.\n\nNothing was added \u2014 try again in a moment, or enter the amount in USD.');
+    if (btn) { btn.textContent = '\u2713 Add to Portfolio'; btn.disabled = false; }
+    _addingPosition = false;
+    return;
   }
+  // Store the rate that was actually used, so the entry can always be audited later.
+  const fxRateUsed = (currency === 'USD') ? 1 : rate;
 
   const exactShares = investedUSD / entryPrice;
   const shares      = fractional ? exactShares : Math.floor(exactShares);
@@ -12762,6 +12848,7 @@ async function addPosition() {
     invested: parseFloat(invested.toFixed(2)),
     investedOriginal: value,
     investedCurrency: currency,
+    fxRateAtEntry: fxRateUsed,   // audit trail: the rate this entry was converted at
     fractional,
     entryDate: new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
     currentPrice: entryPrice,
